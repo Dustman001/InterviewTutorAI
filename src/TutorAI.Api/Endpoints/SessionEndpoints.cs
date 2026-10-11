@@ -1,0 +1,192 @@
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Http.Features;
+using TutorAI.Api.Assessment;
+using TutorAI.Api.Conversation;
+using TutorAI.Api.Data;
+
+namespace TutorAI.Api.Endpoints;
+
+public sealed record SessionDto(Guid Id, string Mode, Scenario Scenario, DateTime StartedAt, DateTime? EndedAt, string Status);
+
+public sealed record SessionSummaryDto(
+    Guid Id, string Mode, Scenario Scenario, DateTime StartedAt, DateTime? EndedAt, string Status, AssessmentLevels? Levels);
+
+public sealed record TurnDto(
+    long Id, int Seq, string Role, string Text, DateTime StartedAt, int? DurationMs, int WordCount,
+    double? AccuracyScore, double? FluencyScore, double? ProsodyScore);
+
+public sealed record SessionDetailDto(SessionDto Session, IReadOnlyList<TurnDto> Turns, AssessmentResponse? Assessment);
+
+public static class SessionEndpoints
+{
+    private static readonly JsonSerializerOptions Json = JsonSerializerOptions.Web;
+
+    public static void MapSessionEndpoints(this IEndpointRouteBuilder app)
+    {
+        var sessions = app.MapGroup("/api/sessions");
+
+        sessions.MapPost("/", async (CreateSessionRequest request, SessionRepository repository, CancellationToken ct) =>
+        {
+            if (!SessionModes.IsValid(request.Mode))
+            {
+                return Results.BadRequest(new { error = $"Mode must be '{SessionModes.Conversation}' or '{SessionModes.Interview}'." });
+            }
+
+            var scenario = request.Scenario ?? new Scenario();
+            var row = await repository.CreateSessionAsync(request.Mode, JsonSerializer.Serialize(scenario, Json), ct);
+            return Results.Created($"/api/sessions/{row.Id}", ToDto(row));
+        });
+
+        sessions.MapGet("/", async (SessionRepository repository, CancellationToken ct) =>
+        {
+            var rows = await repository.ListSessionsAsync(ct);
+            return rows.Select(r => new SessionSummaryDto(
+                r.Id, r.Mode, ParseScenario(r.ScenarioJson), Utc(r.StartedAt), Utc(r.EndedAt), r.Status,
+                r.Overall is null
+                    ? null
+                    : new AssessmentLevels(r.Fluency, r.Grammar, r.Vocabulary, r.Interaction, r.Pronunciation, r.Overall)));
+        });
+
+        sessions.MapGet("/{id:guid}", async (
+            Guid id, SessionRepository repository, AssessmentService assessments, CancellationToken ct) =>
+        {
+            var session = await repository.GetSessionAsync(id, ct);
+            if (session is null)
+            {
+                return Results.NotFound();
+            }
+
+            var turns = await repository.GetTurnsAsync(id, includePronunciationJson: false, ct);
+            return Results.Ok(new SessionDetailDto(ToDto(session), [.. turns.Select(ToDto)], await assessments.GetAsync(id, ct)));
+        });
+
+        sessions.MapPost("/{id:guid}/turns", PostTurnAsync);
+
+        sessions.MapPost("/{id:guid}/end", async (
+            Guid id, bool? regrade, AssessmentService assessments, CancellationToken ct) =>
+            await assessments.EndAndAssessAsync(id, regrade ?? false, ct) is { } result
+                ? Results.Ok(result)
+                : Results.NotFound());
+    }
+
+    /// <summary>
+    /// Stores the learner's turn (when present) and streams the tutor's reply as server-sent events:
+    /// <c>delta</c> {text} fragments, then <c>done</c> {turnId, text}, or <c>error</c> {message}.
+    /// A request without text is only valid as the first call of a session and yields the tutor's opening line.
+    /// </summary>
+    private static async Task<IResult> PostTurnAsync(
+        Guid id, TurnRequest request, HttpContext http, SessionRepository repository, TutorChat chat,
+        ILoggerFactory loggerFactory, CancellationToken ct)
+    {
+        var session = await repository.GetSessionAsync(id, ct);
+        if (session is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (session.Status != SessionStatus.Active)
+        {
+            return Results.Conflict(new { error = "The session has ended." });
+        }
+
+        var turns = (await repository.GetTurnsAsync(id, includePronunciationJson: false, ct)).ToList();
+        var text = request.Text?.Trim();
+        if (string.IsNullOrEmpty(text))
+        {
+            if (turns.Count > 0)
+            {
+                return Results.BadRequest(new { error = "Text is required once the session has started." });
+            }
+        }
+        else
+        {
+            var phrases = AzurePronunciation.ParseTurn(request.Phrases);
+            turns.Add(await repository.AddTurnAsync(
+                new TurnRow
+                {
+                    SessionId = id,
+                    Role = TurnRoles.User,
+                    Text = text,
+                    DurationMs = request.DurationMs,
+                    WordCount = CountWords(text),
+                    AccuracyScore = AzurePronunciation.WeightedMean(phrases, p => p.Accuracy),
+                    FluencyScore = AzurePronunciation.WeightedMean(phrases, p => p.Fluency),
+                    ProsodyScore = AzurePronunciation.WeightedMean(phrases, p => p.Prosody),
+                    PronunciationJson = request.Phrases is { Length: > 0 } ? JsonSerializer.Serialize(request.Phrases) : null,
+                },
+                ct));
+        }
+
+        http.Response.ContentType = "text/event-stream";
+        http.Response.Headers.CacheControl = "no-cache";
+        http.Response.Headers["X-Accel-Buffering"] = "no";
+        http.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
+
+        var reply = new StringBuilder();
+        string? error = null;
+        try
+        {
+            await foreach (var fragment in chat.StreamReplyAsync(session, turns, ct))
+            {
+                reply.Append(fragment);
+                await WriteEventAsync(http, "delta", new { text = fragment }, ct);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The learner interrupted or left; keep whatever was already said.
+        }
+        catch (Exception ex)
+        {
+            loggerFactory.CreateLogger(typeof(SessionEndpoints)).LogError(ex, "Tutor reply failed for session {SessionId}", id);
+            error = "The tutor could not reply. Check the API logs and your Anthropic credentials.";
+        }
+
+        TurnRow? tutorTurn = null;
+        if (reply.Length > 0)
+        {
+            var replyText = reply.ToString().Trim();
+            tutorTurn = await repository.AddTurnAsync(
+                new TurnRow { SessionId = id, Role = TurnRoles.Tutor, Text = replyText, WordCount = CountWords(replyText) },
+                CancellationToken.None);
+        }
+
+        if (!ct.IsCancellationRequested)
+        {
+            if (error is not null)
+            {
+                await WriteEventAsync(http, "error", new { message = error }, ct);
+            }
+            else
+            {
+                await WriteEventAsync(http, "done", new { turnId = tutorTurn?.Id, text = tutorTurn?.Text ?? "" }, ct);
+            }
+        }
+
+        return Results.Empty;
+    }
+
+    private static async Task WriteEventAsync(HttpContext http, string name, object data, CancellationToken ct)
+    {
+        await http.Response.WriteAsync($"event: {name}\ndata: {JsonSerializer.Serialize(data, Json)}\n\n", ct);
+        await http.Response.Body.FlushAsync(ct);
+    }
+
+    internal static int CountWords(string text) =>
+        text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+
+    private static SessionDto ToDto(SessionRow row) =>
+        new(row.Id, row.Mode, ParseScenario(row.ScenarioJson), Utc(row.StartedAt), Utc(row.EndedAt), row.Status);
+
+    private static TurnDto ToDto(TurnRow row) =>
+        new(row.Id, row.Seq, row.Role, row.Text, Utc(row.StartedAt), row.DurationMs, row.WordCount,
+            row.AccuracyScore, row.FluencyScore, row.ProsodyScore);
+
+    private static Scenario ParseScenario(string json) => JsonSerializer.Deserialize<Scenario>(json, Json) ?? new Scenario();
+
+    // SQL Server datetime2 comes back with Kind=Unspecified; every stored timestamp is UTC.
+    private static DateTime Utc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
+
+    private static DateTime? Utc(DateTime? value) => value is { } v ? Utc(v) : null;
+}

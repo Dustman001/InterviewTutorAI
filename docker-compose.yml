@@ -1,0 +1,15 @@
+services:
+  sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: tutorai-sql
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${TUTORAI_SQL_PASSWORD:-TutorAI!Pass123}"
+    ports:
+      # 1433 on this machine belongs to genesis-sql
+      - "14333:1433"
+    volumes:
+      - tutorai-sql-data:/var/opt/mssql
+
+volumes:
+  tutorai-sql-data:
