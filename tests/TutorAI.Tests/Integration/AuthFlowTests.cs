@@ -40,7 +40,7 @@ public sealed class AuthFlowTests(ThrowawayDatabase database) : IClassFixture<Th
     {
         await using var api = TestApi.Create(database.ConnectionString);
         var admin = await TestApi.SignInAsync(api, TestApi.AdminUsername, TestApi.AdminPassword);
-        var guest = await TestApi.SignInAsync(api, TestApi.GuestUsername, TestApi.GuestPassword);
+        var guest = await TestApi.SignInGuestAsync(api);
         var adminSession = await CreateSessionAsync(admin);
 
         var me = await guest.GetFromJsonAsync<JsonElement>("/api/auth/me");
@@ -101,7 +101,7 @@ public sealed class AuthFlowTests(ThrowawayDatabase database) : IClassFixture<Th
     public async Task Passwords_are_stored_hashed()
     {
         await using var api = TestApi.Create(database.ConnectionString);
-        await TestApi.SignInAsync(api, TestApi.GuestUsername, TestApi.GuestPassword);
+        await TestApi.SignInGuestAsync(api);
 
         using var db = database.Open();
         var hash = db.ExecuteScalar<string>(

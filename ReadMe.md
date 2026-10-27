@@ -13,7 +13,7 @@ on the CEFR scale.
 
 ## Configuration and secrets
 
-The API reads these settings. In Azure the six secrets live in **Azure Key Vault**; nothing secret
+The API reads these settings. In Azure the five secrets live in **Azure Key Vault**; nothing secret
 goes in `appsettings.json` or App Service app settings.
 
 | Setting | Secret? | Key Vault secret name | Where it's set in Azure |
@@ -23,11 +23,10 @@ goes in `appsettings.json` or App Service app settings.
 | `ConnectionStrings:TutorAI` | yes | `ConnectionStrings--TutorAI` | Key Vault |
 | `Auth:JwtSigningKey` | yes | `Auth--JwtSigningKey` | Key Vault (32+ random characters) |
 | `Auth:AdminPassword` | yes | `Auth--AdminPassword` | Key Vault |
-| `Auth:GuestPassword` | yes | `Auth--GuestPassword` | Key Vault |
 | `KeyVault:Uri` | no | – | App setting `KeyVault__Uri` |
 | `AzureSpeech:Region` | no | – | App setting `AzureSpeech__Region` |
 | `Anthropic:ConversationModel` / `GradingModel` | no | – | `appsettings.json` (override with app settings if needed) |
-| `Auth:AdminUsername` / `GuestUsername` / `GuestSessionLimit` / `TokenLifetimeMinutes` | no | – | `appsettings.json` (`admin`, `guest`, `3`, `15`) |
+| `Auth:AdminUsername` / `TokenLifetimeMinutes` | no | – | `appsettings.json` (`admin`, `15`) |
 
 How it works: when `KeyVault:Uri` is set, `Program.cs` adds Key Vault as a configuration source and
 signs in with `DefaultAzureCredential` (the App Service managed identity in Azure, your `az login`
@@ -39,13 +38,14 @@ Secrets are read once at startup. After rotating a secret, restart the API web a
 
 ## Sign-in and users
 
-Every page needs a sign-in. Two built-in accounts are created by the API on first startup, from
-configuration:
+Every page needs a sign-in. On first startup the API creates one built-in account, `admin`, from
+`Auth:AdminUsername` and `Auth:AdminPassword`. Everyone else, guests included, is added by an admin on
+the Users page.
 
-| Account | Role | Sessions |
-| --- | --- | --- |
-| `admin` | Admin | Unlimited. Sees every user's sessions and manages users. |
-| `guest` | Guest | 3 (each **Start session** counts, finished or not). Sees only its own sessions. |
+| Role | Sessions |
+| --- | --- |
+| Admin | Unlimited. Sees every user's sessions and manages users. |
+| Guest | Up to the limit set for that user (each **Start session** counts, finished or not). Sees only their own sessions. |
 
 ### Managing users
 
@@ -62,10 +62,9 @@ Admins can't disable, demote or delete their own account, and the last enabled a
 Changing a role also signs the user out.
 
 Passwords are stored hashed (ASP.NET Core Identity's PBKDF2 hasher) in `dbo.Users`, at least 8
-characters. After the first startup the Users page owns the built-in accounts too: a password set on
-the page survives restarts. Changing `Auth:AdminPassword` / `Auth:GuestPassword` and restarting the API
-still resets that account to the new value. That's the way back in if the admin password is lost.
-`Auth:GuestSessionLimit` only applies when the guest account is first created.
+characters. After the first startup the Users page owns the built-in admin too: a password set on the
+page survives restarts. Changing `Auth:AdminPassword` and restarting the API still resets the admin to
+the new value. That's the way back in if the admin password is lost.
 
 ### Tokens
 
@@ -95,7 +94,6 @@ dotnet user-secrets set "AzureSpeech:Key"    "<speech-key>"
 dotnet user-secrets set "AzureSpeech:Region" "<speech-region, e.g. eastus>"
 dotnet user-secrets set "Auth:JwtSigningKey" "<32+ random characters>"
 dotnet user-secrets set "Auth:AdminPassword" "<admin password>"
-dotnet user-secrets set "Auth:GuestPassword" "<guest password>"
 dotnet run                                             # http://localhost:5080
 cd ../..
 
@@ -209,15 +207,14 @@ $bytes = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Cr
 az keyvault secret set --vault-name $kv -n "Auth--JwtSigningKey" --value ([Convert]::ToBase64String($bytes)) | Out-Null
 
 az keyvault secret set --vault-name $kv -n "Auth--AdminPassword" --value "<admin password>" | Out-Null
-az keyvault secret set --vault-name $kv -n "Auth--GuestPassword" --value "<guest password>" | Out-Null
 ```
 
-Check the vault now holds all six secrets:
+Check the vault now holds all five secrets:
 
 ```powershell
 az keyvault secret list --vault-name $kv --query "[].name" -o tsv
-# Anthropic--ApiKey, Auth--AdminPassword, Auth--GuestPassword, Auth--JwtSigningKey,
-# AzureSpeech--Key, ConnectionStrings--TutorAI
+# Anthropic--ApiKey, Auth--AdminPassword, Auth--JwtSigningKey, AzureSpeech--Key,
+# ConnectionStrings--TutorAI
 ```
 
 ### 7. Run the database migrations

@@ -13,7 +13,7 @@ public sealed class UserAdminTests(ThrowawayDatabase database) : IClassFixture<T
     public async Task Only_admins_can_manage_users()
     {
         await using var api = TestApi.Create(database.ConnectionString);
-        var guest = await TestApi.SignInAsync(api, TestApi.GuestUsername, TestApi.GuestPassword);
+        var guest = await TestApi.SignInGuestAsync(api);
 
         Assert.Equal(HttpStatusCode.Forbidden, (await guest.GetAsync("/api/users")).StatusCode);
         Assert.Equal(
@@ -148,6 +148,7 @@ public sealed class UserAdminTests(ThrowawayDatabase database) : IClassFixture<T
     public async Task Tokens_last_fifteen_minutes_and_refresh_issues_a_new_one()
     {
         await using var api = TestApi.Create(database.ConnectionString);
+        await TestApi.EnsureGuestAsync(api);
         var login = await api.CreateClient().PostAsJsonAsync(
             "/api/auth/login", new { username = TestApi.GuestUsername, password = TestApi.GuestPassword });
         var body = await login.Content.ReadFromJsonAsync<JsonElement>();
@@ -168,6 +169,7 @@ public sealed class UserAdminTests(ThrowawayDatabase database) : IClassFixture<T
         // Its own accounts, so other tests' admin changes don't interfere.
         await using (var first = TestApi.Create(database.ConnectionString))
         {
+            await TestApi.EnsureGuestAsync(first);
             var admin = await AdminAsync(first);
             var guestId = await IdOfAsync(admin, TestApi.GuestUsername);
             await admin.PostAsJsonAsync($"/api/users/{guestId}/password", new { password = "set-on-the-page" });

@@ -4,9 +4,10 @@ using Microsoft.Extensions.Options;
 namespace TutorAI.Api.Auth;
 
 /// <summary>
-/// Creates the built-in admin and guest accounts from configuration when they don't exist yet.
-/// After that the Users page owns them, except that changing the configured password (and restarting)
-/// still resets the account to it, so a lost admin password can always be recovered from Key Vault.
+/// Creates the built-in admin account from configuration when it doesn't exist yet. Every other user,
+/// guests included, is created on the Users page. After creation the Users page owns the admin too, except
+/// that changing the configured password (and restarting) still resets it, so a lost admin password can
+/// always be recovered from Key Vault.
 /// </summary>
 public sealed class UserSeeder(
     UserRepository users, IPasswordHasher<UserRow> hasher, IOptions<AuthOptions> options, ILogger<UserSeeder> logger)
@@ -30,8 +31,7 @@ public sealed class UserSeeder(
             }
 
             var auth = options.Value;
-            await EnsureUserAsync(auth.AdminUsername, auth.AdminPassword, UserRoles.Admin, sessionLimit: null, ct);
-            await EnsureUserAsync(auth.GuestUsername, auth.GuestPassword, UserRoles.Guest, auth.GuestSessionLimit, ct);
+            await EnsureAdminAsync(auth.AdminUsername, auth.AdminPassword, ct);
             _done = true;
         }
         finally
@@ -40,22 +40,22 @@ public sealed class UserSeeder(
         }
     }
 
-    private async Task EnsureUserAsync(string username, string? password, string role, int? sessionLimit, CancellationToken ct)
+    private async Task EnsureAdminAsync(string username, string? password, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(password))
         {
-            logger.LogWarning("No password configured for the built-in {Role} account '{Username}'; it is not created or updated.", role, username);
+            logger.LogWarning("No Auth:AdminPassword configured; the built-in admin '{Username}' is not created or updated.", username);
             return;
         }
 
         var existing = await users.GetByUsernameAsync(username, ct);
         if (existing is null)
         {
-            var user = new UserRow { Username = username, Role = role, SessionLimit = sessionLimit };
+            var user = new UserRow { Username = username, Role = UserRoles.Admin };
             user.PasswordHash = hasher.HashPassword(user, password);
             user.ConfigPasswordHash = user.PasswordHash;
             await users.InsertAsync(user, ct);
-            logger.LogInformation("Created the built-in {Role} account '{Username}'.", role, username);
+            logger.LogInformation("Created the built-in admin account '{Username}'.", username);
             return;
         }
 

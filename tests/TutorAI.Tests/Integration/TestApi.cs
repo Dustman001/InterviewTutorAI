@@ -6,7 +6,10 @@ using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace TutorAI.Tests.Integration;
 
-/// <summary>The real API on a throwaway database, with known sign-in accounts and Key Vault switched off.</summary>
+/// <summary>
+/// The real API on a throwaway database, with a known admin and Key Vault switched off. The guest is an
+/// ordinary user created through the admin API (see <see cref="SignInGuestAsync"/>), as in production.
+/// </summary>
 internal static class TestApi
 {
     public const string AdminUsername = "e2e-admin";
@@ -22,9 +25,7 @@ internal static class TestApi
             .UseSetting("Auth:JwtSigningKey", "e2e-signing-key-0123456789abcdefghijklmnop")
             .UseSetting("Auth:AdminUsername", AdminUsername)
             .UseSetting("Auth:AdminPassword", adminPassword ?? AdminPassword)
-            .UseSetting("Auth:GuestUsername", GuestUsername)
-            .UseSetting("Auth:GuestPassword", GuestPassword)
-            .UseSetting("Auth:GuestSessionLimit", "3"));
+            );
 
     /// <summary>Signs in and returns the raw token, or null with the status code when sign-in fails.</summary>
     public static async Task<(string? Token, System.Net.HttpStatusCode Status)> TryLoginAsync(
@@ -34,6 +35,23 @@ internal static class TestApi
         return response.IsSuccessStatusCode
             ? ((await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("token").GetString(), response.StatusCode)
             : (null, response.StatusCode);
+    }
+
+    /// <summary>Creates the e2e guest (limit 3) through the admin API unless it already exists.</summary>
+    public static async Task EnsureGuestAsync(WebApplicationFactory<Program> api)
+    {
+        var admin = await SignInAsync(api, AdminUsername, AdminPassword);
+        var response = await admin.PostAsJsonAsync(
+            "/api/users", new { username = GuestUsername, password = GuestPassword, role = "Guest", sessionLimit = 3 });
+        Assert.True(
+            response.StatusCode is System.Net.HttpStatusCode.Created or System.Net.HttpStatusCode.Conflict,
+            await response.Content.ReadAsStringAsync());
+    }
+
+    public static async Task<HttpClient> SignInGuestAsync(WebApplicationFactory<Program> api)
+    {
+        await EnsureGuestAsync(api);
+        return await SignInAsync(api, GuestUsername, GuestPassword);
     }
 
     public static HttpClient WithToken(WebApplicationFactory<Program> api, string token)

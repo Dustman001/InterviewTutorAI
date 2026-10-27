@@ -28,11 +28,6 @@ public sealed class AuthOptions
     public string AdminUsername { get; set; } = "admin";
     /// <summary>Secret. Key Vault secret Auth--AdminPassword. The admin account is not created while this is empty.</summary>
     public string? AdminPassword { get; set; }
-
-    public string GuestUsername { get; set; } = "guest";
-    /// <summary>Secret. Key Vault secret Auth--GuestPassword. The guest account is not created while this is empty.</summary>
-    public string? GuestPassword { get; set; }
-    public int GuestSessionLimit { get; set; } = 3;
 }
 
 public sealed class AssessmentOptions
