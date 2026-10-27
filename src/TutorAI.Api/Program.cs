@@ -1,4 +1,5 @@
 using Anthropic;
+using Azure.Identity;
 using TutorAI.Api;
 using TutorAI.Api.Assessment;
 using TutorAI.Api.Conversation;
@@ -7,6 +8,14 @@ using TutorAI.Api.Endpoints;
 using TutorAI.Api.Speech;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// In Azure, secrets come from Key Vault. Secret names use "--" for ":" (e.g. Anthropic--ApiKey).
+// Locally, leave KeyVault:Uri empty and use dotnet user-secrets instead.
+var keyVaultUri = builder.Configuration["KeyVault:Uri"];
+if (!string.IsNullOrWhiteSpace(keyVaultUri))
+{
+    builder.Configuration.AddAzureKeyVault(new Uri(keyVaultUri), new DefaultAzureCredential());
+}
 
 builder.Services.Configure<AzureSpeechOptions>(builder.Configuration.GetSection("AzureSpeech"));
 builder.Services.Configure<AnthropicOptions>(builder.Configuration.GetSection("Anthropic"));
@@ -47,7 +56,7 @@ app.MapGet("/api/speech/token", async (SpeechTokenService speech, CancellationTo
     if (!speech.IsConfigured)
     {
         return Results.Json(
-            new { error = "Azure Speech is not configured. Set AzureSpeech:Key and AzureSpeech:Region with dotnet user-secrets." },
+            new { error = "Azure Speech is not configured. Set AzureSpeech:Key (Key Vault secret AzureSpeech--Key, or dotnet user-secrets locally) and AzureSpeech:Region." },
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
