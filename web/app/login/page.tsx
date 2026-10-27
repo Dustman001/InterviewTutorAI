@@ -36,40 +36,40 @@ export default function Login() {
 
   return (
     <main className="shell login">
-      <h1>Speech tutor</h1>
-      <p className="lead">Sign in to practise.</p>
+      <div className="Centered">
+        <form className="card setup" onSubmit={signIn}>
+          <h1 className="Centered">AI Speech tutor</h1>
+          {error && (
+            <div className="banner" role="alert">
+              {error}
+            </div>
+          )}
+          <label className="field">
+            <span>Username</span>
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              autoFocus
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Password</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </label>
+          <button className="primary" type="submit" disabled={busy}>
+            {busy ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
+      </div>
 
-      {error && (
-        <div className="banner" role="alert">
-          {error}
-        </div>
-      )}
-
-      <form className="card setup" onSubmit={signIn}>
-        <label className="field">
-          <span>Username</span>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="username"
-            autoFocus
-            required
-          />
-        </label>
-        <label className="field">
-          <span>Password</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-            required
-          />
-        </label>
-        <button className="primary" type="submit" disabled={busy}>
-          {busy ? "Signing in…" : "Sign in"}
-        </button>
-      </form>
     </main>
   );
 }

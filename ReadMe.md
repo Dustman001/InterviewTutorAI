@@ -182,12 +182,19 @@ az keyvault secret set --vault-name $kv -n "AzureSpeech--Key" --value $speechKey
 
 ### 5. Azure SQL Database
 
+If `az sql server create` fails with `RegionDoesNotAllowProvisioning`, that region isn't taking new SQL
+servers. Pick another (for example `centralus`), with a **new server name**, since the failed name stays
+reserved for a while. Put the App Service plan in the same region as the database.
+
 Create the database explicitly. The migrator creates the database if it's missing, but on Azure SQL a
 bare `CREATE DATABASE` gets a default General Purpose tier that costs far more than this app needs.
 
 ```powershell
 az sql server create -n $sqlServer -g $rg -l $loc --admin-user $sqlAdmin --admin-password $sqlPassword
 az sql db create -g $rg -s $sqlServer -n TutorAI --service-objective Basic
+# Or, free (one per subscription; pauses when the monthly free amount is used up):
+# az sql db create -g $rg -s $sqlServer -n TutorAI --edition GeneralPurpose --compute-model Serverless `
+#   --family Gen5 --capacity 2 --use-free-limit --free-limit-exhaustion-behavior AutoPause
 
 # Let Azure services (the API web app) reach the server
 az sql server firewall-rule create -g $rg -s $sqlServer -n AllowAzureServices `
@@ -251,8 +258,9 @@ az webapp config appsettings set -n $apiApp -g $rg --settings `
   "ASPNETCORE_ENVIRONMENT=Production"
 
 az webapp config set -n $apiApp -g $rg --always-on true --https-only true
-az resource update -g $rg --resource-type "Microsoft.Web/sites/config" --parent "sites/$apiApp" `
-  -n web --set properties.healthCheckPath=/api/health
+'{"healthCheckPath": "/api/health"}' | Set-Content -Encoding ascii healthcheck.json
+az webapp config set -n $apiApp -g $rg --generic-configurations "@healthcheck.json"
+Remove-Item healthcheck.json
 ```
 
 Deploy the API:
@@ -277,21 +285,40 @@ If the API fails to start, it's usually Key Vault access: the role assignment ha
 ### 9. Web front end
 
 The Next.js app forwards `/api/*` to the API at the address in `TUTORAI_API_URL`, read at request
-time (changing it needs a restart, not a redeploy). App Service builds the app on deploy
-(`SCM_DO_BUILD_DURING_DEPLOYMENT`).
+time (changing it needs a restart, not a redeploy).
+
+The app is built **on your machine** and deployed as a self-contained `standalone` server
+(`output: "standalone"` in `web/next.config.ts`). Don't let App Service build it: on a B1 plan,
+`npm install` plus `next build` takes over 15 minutes and gets killed.
+
+Create and configure the app first. Settings changes restart the deployment service, so let them settle
+for a minute before deploying.
 
 ```powershell
 az webapp create -n $webApp -g $rg -p $plan --runtime "NODE:24-lts"
 az webapp config appsettings set -n $webApp -g $rg --settings `
   "TUTORAI_API_URL=https://$apiApp.azurewebsites.net" `
-  "SCM_DO_BUILD_DURING_DEPLOYMENT=true"
-az webapp config set -n $webApp -g $rg --startup-file "npm run start" --always-on true --https-only true
-
-tar.exe -a -c -f publish/web.zip --exclude node_modules --exclude .next -C web .
-az webapp deploy -g $rg -n $webApp --src-path publish/web.zip --type zip
+  "SCM_DO_BUILD_DURING_DEPLOYMENT=false" "HOSTNAME=0.0.0.0" "NODE_ENV=production"
+az webapp config set -n $webApp -g $rg --startup-file "node server.js" --always-on true
+az webapp update -n $webApp -g $rg --https-only true
 ```
 
-The first deploy takes several minutes while `npm install` and `next build` run on the server.
+Build, package and deploy:
+
+```powershell
+cd web; npm ci; npm run build; cd ..
+Remove-Item -Recurse -Force publish/web -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force publish/web | Out-Null
+Copy-Item -Recurse web/.next/standalone/* publish/web/
+Copy-Item -Recurse web/.next/static publish/web/.next/static
+Copy-Item -Recurse web/public publish/web/public
+tar.exe -a -c -f publish/web.zip -C publish/web .
+az webapp deploy -g $rg -n $webApp --src-path publish/web.zip --type zip --clean true --track-status false
+```
+
+The deploy itself takes under a minute, and the site starts about 20 seconds later. If the CLI reports
+a 502 or 504, check `https://<webApp>.scm.azurewebsites.net/api/deployments/latest`; the deployment
+often finishes anyway.
 
 ### 10. Smoke test
 
@@ -306,7 +333,7 @@ The first deploy takes several minutes while `npm install` and `next build` run 
 | Change | What to do |
 | --- | --- |
 | API code | Repeat the publish + `az webapp deploy` in step 8 |
-| Web code | Repeat the zip + `az webapp deploy` in step 9 |
+| Web code | Repeat the build, package and deploy block in step 9 |
 | New migration script | Re-run step 7 before deploying the API |
 | Rotate a key or password | `az keyvault secret set ...` with the new value, then `az webapp restart -n $apiApp -g $rg` |
 | Sign everyone out | Rotate `Auth--JwtSigningKey` and restart the API |
