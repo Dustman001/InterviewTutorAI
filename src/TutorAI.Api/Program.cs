@@ -1,7 +1,12 @@
 using Anthropic;
 using Azure.Identity;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Options;
 using TutorAI.Api;
 using TutorAI.Api.Assessment;
+using TutorAI.Api.Auth;
 using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
 using TutorAI.Api.Endpoints;
@@ -20,6 +25,25 @@ if (!string.IsNullOrWhiteSpace(keyVaultUri))
 builder.Services.Configure<AzureSpeechOptions>(builder.Configuration.GetSection("AzureSpeech"));
 builder.Services.Configure<AnthropicOptions>(builder.Configuration.GetSection("Anthropic"));
 builder.Services.Configure<AssessmentOptions>(builder.Configuration.GetSection("Assessment"));
+builder.Services.AddOptions<AuthOptions>()
+    .Bind(builder.Configuration.GetSection("Auth"))
+    .Validate(
+        auth => auth.JwtSigningKey is { Length: >= 32 },
+        "Auth:JwtSigningKey must be set to at least 32 characters (Key Vault secret Auth--JwtSigningKey, or dotnet user-secrets locally).")
+    .ValidateOnStart();
+
+// Every endpoint needs the JWT the web app forwards, unless it is marked AllowAnonymous.
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
+builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+    .Configure<IOptions<AuthOptions>>((jwt, auth) =>
+    {
+        jwt.MapInboundClaims = false;
+        jwt.TokenValidationParameters = TokenService.ValidationParameters(auth.Value);
+        jwt.Events = new JwtBearerEvents { OnTokenValidated = TokenRevocation.CheckAsync };
+    });
+builder.Services.AddAuthorizationBuilder()
+    .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build())
+    .AddPolicy(UserRoles.Admin, policy => policy.RequireRole(UserRoles.Admin));
 
 builder.Services.AddSingleton(_ =>
 {
@@ -27,12 +51,21 @@ builder.Services.AddSingleton(_ =>
     return string.IsNullOrWhiteSpace(apiKey) ? new AnthropicClient() : new AnthropicClient { ApiKey = apiKey };
 });
 builder.Services.AddSingleton<SessionRepository>();
+builder.Services.AddSingleton<UserRepository>();
+builder.Services.AddSingleton<IPasswordHasher<UserRow>, PasswordHasher<UserRow>>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<TokenService>();
+builder.Services.AddSingleton<UserSeeder>();
+builder.Services.AddHostedService<UserSeederStartup>();
 builder.Services.AddSingleton<TutorChat>();
 builder.Services.AddSingleton<CefrGrader>();
 builder.Services.AddSingleton<AssessmentService>();
 builder.Services.AddHttpClient<SpeechTokenService>();
 
 var app = builder.Build();
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGet("/api/health", async (SessionRepository repository, SpeechTokenService speech, CancellationToken ct) =>
 {
@@ -49,7 +82,7 @@ app.MapGet("/api/health", async (SessionRepository repository, SpeechTokenServic
     return Results.Json(
         new { database, speechConfigured = speech.IsConfigured },
         statusCode: database ? StatusCodes.Status200OK : StatusCodes.Status503ServiceUnavailable);
-});
+}).AllowAnonymous();
 
 app.MapGet("/api/speech/token", async (SpeechTokenService speech, CancellationToken ct) =>
 {
@@ -72,6 +105,8 @@ app.MapGet("/api/speech/token", async (SpeechTokenService speech, CancellationTo
     }
 });
 
+app.MapAuthEndpoints();
+app.MapUserEndpoints();
 app.MapSessionEndpoints();
 
 app.Run();

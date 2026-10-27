@@ -1,7 +1,10 @@
+using System.Diagnostics.CodeAnalysis;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http.Features;
 using TutorAI.Api.Assessment;
+using TutorAI.Api.Auth;
 using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
 
@@ -26,7 +29,9 @@ public static class SessionEndpoints
     {
         var sessions = app.MapGroup("/api/sessions");
 
-        sessions.MapPost("/", async (CreateSessionRequest request, SessionRepository repository, CancellationToken ct) =>
+        sessions.MapPost("/", async (
+            CreateSessionRequest request, ClaimsPrincipal user, SessionRepository repository, UserRepository users,
+            CancellationToken ct) =>
         {
             if (!SessionModes.IsValid(request.Mode))
             {
@@ -34,13 +39,22 @@ public static class SessionEndpoints
             }
 
             var scenario = request.Scenario ?? new Scenario();
-            var row = await repository.CreateSessionAsync(request.Mode, JsonSerializer.Serialize(scenario, Json), ct);
+            var row = await repository.CreateSessionAsync(user.UserId(), request.Mode, JsonSerializer.Serialize(scenario, Json), ct);
+            if (row is null)
+            {
+                return await users.GetByIdAsync(user.UserId(), ct) is { SessionLimit: { } limit }
+                    ? Results.Json(
+                        new { error = $"This account can start {limit} sessions and has used them all. Sign in as another user to continue." },
+                        statusCode: StatusCodes.Status403Forbidden)
+                    : Results.Unauthorized();
+            }
+
             return Results.Created($"/api/sessions/{row.Id}", ToDto(row));
         });
 
-        sessions.MapGet("/", async (SessionRepository repository, CancellationToken ct) =>
+        sessions.MapGet("/", async (ClaimsPrincipal user, SessionRepository repository, CancellationToken ct) =>
         {
-            var rows = await repository.ListSessionsAsync(ct);
+            var rows = await repository.ListSessionsAsync(user.IsAdmin() ? null : user.UserId(), ct);
             return rows.Select(r => new SessionSummaryDto(
                 r.Id, r.Mode, ParseScenario(r.ScenarioJson), Utc(r.StartedAt), Utc(r.EndedAt), r.Status,
                 r.Overall is null
@@ -49,10 +63,10 @@ public static class SessionEndpoints
         });
 
         sessions.MapGet("/{id:guid}", async (
-            Guid id, SessionRepository repository, AssessmentService assessments, CancellationToken ct) =>
+            Guid id, ClaimsPrincipal user, SessionRepository repository, AssessmentService assessments, CancellationToken ct) =>
         {
             var session = await repository.GetSessionAsync(id, ct);
-            if (session is null)
+            if (!CanAccess(user, session))
             {
                 return Results.NotFound();
             }
@@ -64,10 +78,18 @@ public static class SessionEndpoints
         sessions.MapPost("/{id:guid}/turns", PostTurnAsync);
 
         sessions.MapPost("/{id:guid}/end", async (
-            Guid id, bool? regrade, AssessmentService assessments, CancellationToken ct) =>
-            await assessments.EndAndAssessAsync(id, regrade ?? false, ct) is { } result
+            Guid id, bool? regrade, ClaimsPrincipal user, SessionRepository repository, AssessmentService assessments,
+            CancellationToken ct) =>
+        {
+            if (!CanAccess(user, await repository.GetSessionAsync(id, ct)))
+            {
+                return Results.NotFound();
+            }
+
+            return await assessments.EndAndAssessAsync(id, regrade ?? false, ct) is { } result
                 ? Results.Ok(result)
-                : Results.NotFound());
+                : Results.NotFound();
+        });
     }
 
     /// <summary>
@@ -80,7 +102,7 @@ public static class SessionEndpoints
         ILoggerFactory loggerFactory, CancellationToken ct)
     {
         var session = await repository.GetSessionAsync(id, ct);
-        if (session is null)
+        if (!CanAccess(http.User, session))
         {
             return Results.NotFound();
         }
@@ -172,6 +194,10 @@ public static class SessionEndpoints
         await http.Response.WriteAsync($"event: {name}\ndata: {JsonSerializer.Serialize(data, Json)}\n\n", ct);
         await http.Response.Body.FlushAsync(ct);
     }
+
+    /// <summary>Users reach only their own sessions; admins reach all. Others get 404, not 403, so ids are not confirmed.</summary>
+    private static bool CanAccess(ClaimsPrincipal user, [NotNullWhen(true)] SessionRow? session) =>
+        session is not null && (user.IsAdmin() || session.UserId == user.UserId());
 
     internal static int CountWords(string text) =>
         text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;

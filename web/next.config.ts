@@ -1,13 +1,10 @@
 import type { NextConfig } from "next";
 
-const apiUrl = process.env.TUTORAI_API_URL ?? "http://localhost:5080";
-
+// /api/* is forwarded to TutorAI.Api by app/api/[...path]/route.ts, which reads TUTORAI_API_URL at
+// request time and attaches the signed-in user's JWT.
 const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
-  rewrites() {
-    return [{ source: "/api/:path*", destination: `${apiUrl}/api/:path*` }];
-  },
 };
 
 export default nextConfig;

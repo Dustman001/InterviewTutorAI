@@ -13,7 +13,7 @@ on the CEFR scale.
 
 ## Configuration and secrets
 
-The API reads these settings. In Azure the three secrets live in **Azure Key Vault**; nothing secret
+The API reads these settings. In Azure the six secrets live in **Azure Key Vault**; nothing secret
 goes in `appsettings.json` or App Service app settings.
 
 | Setting | Secret? | Key Vault secret name | Where it's set in Azure |
@@ -21,9 +21,13 @@ goes in `appsettings.json` or App Service app settings.
 | `Anthropic:ApiKey` | yes | `Anthropic--ApiKey` | Key Vault |
 | `AzureSpeech:Key` | yes | `AzureSpeech--Key` | Key Vault |
 | `ConnectionStrings:TutorAI` | yes | `ConnectionStrings--TutorAI` | Key Vault |
+| `Auth:JwtSigningKey` | yes | `Auth--JwtSigningKey` | Key Vault (32+ random characters) |
+| `Auth:AdminPassword` | yes | `Auth--AdminPassword` | Key Vault |
+| `Auth:GuestPassword` | yes | `Auth--GuestPassword` | Key Vault |
 | `KeyVault:Uri` | no | – | App setting `KeyVault__Uri` |
 | `AzureSpeech:Region` | no | – | App setting `AzureSpeech__Region` |
 | `Anthropic:ConversationModel` / `GradingModel` | no | – | `appsettings.json` (override with app settings if needed) |
+| `Auth:AdminUsername` / `GuestUsername` / `GuestSessionLimit` / `TokenLifetimeMinutes` | no | – | `appsettings.json` (`admin`, `guest`, `3`, `15`) |
 
 How it works: when `KeyVault:Uri` is set, `Program.cs` adds Key Vault as a configuration source and
 signs in with `DefaultAzureCredential` (the App Service managed identity in Azure, your `az login`
@@ -32,6 +36,52 @@ locally). Key Vault secret names can't contain `:`, so `--` stands in for it
 local user-secrets are used.
 
 Secrets are read once at startup. After rotating a secret, restart the API web app.
+
+## Sign-in and users
+
+Every page needs a sign-in. Two built-in accounts are created by the API on first startup, from
+configuration:
+
+| Account | Role | Sessions |
+| --- | --- | --- |
+| `admin` | Admin | Unlimited. Sees every user's sessions and manages users. |
+| `guest` | Guest | 3 (each **Start session** counts, finished or not). Sees only its own sessions. |
+
+### Managing users
+
+Admins get a **Manage users** link (`/users`) where they can:
+
+- **Add a user** with a role (Admin or Guest) and, for guests, a session limit.
+- **Disable / Enable** a user. A disabled user can't sign in and is signed out on their next request.
+- **Reset password.** The user is signed out everywhere.
+- **Change limit** and **Reset sessions** (guests). A reset gives back the full allowance; past
+  sessions stay in their history.
+- **Delete** a user. Their past sessions are kept, without an owner, and only admins see them.
+
+Admins can't disable, demote or delete their own account, and the last enabled admin can't be removed.
+Changing a role also signs the user out.
+
+Passwords are stored hashed (ASP.NET Core Identity's PBKDF2 hasher) in `dbo.Users`, at least 8
+characters. After the first startup the Users page owns the built-in accounts too: a password set on
+the page survives restarts. Changing `Auth:AdminPassword` / `Auth:GuestPassword` and restarting the API
+still resets that account to the new value. That's the way back in if the admin password is lost.
+`Auth:GuestSessionLimit` only applies when the guest account is first created.
+
+### Tokens
+
+1. The `/login` page posts to the web app (`/auth/login`), which calls the API's `POST /api/auth/login`.
+2. The API checks the password and returns a JWT signed with `Auth:JwtSigningKey` (HS256) that expires
+   after **15 minutes** (`Auth:TokenLifetimeMinutes`).
+3. The web app stores the JWT in an httpOnly cookie, so browser scripts can't read it.
+4. Every `/api/*` call goes through `web/app/api/[...path]/route.ts`, which forwards it to the API with
+   `Authorization: Bearer <jwt>`. Once a token has less than 10 minutes left, the web app swaps in a
+   fresh one (`POST /api/auth/refresh`), so an active user stays signed in and **15 minutes of
+   inactivity signs the user out**. `web/proxy.ts` does the same for page loads, sends signed-out
+   visitors to `/login`, and keeps non-admins out of `/users`.
+5. The API rejects any request without a valid token (401), except `/api/health` and
+   `/api/auth/login`. Each token carries the user's `TokenVersion`, checked against `dbo.Users` on
+   every request. That's how disabling a user, resetting a password or changing a role takes effect
+   immediately instead of when the token expires.
 
 ## Run locally
 
@@ -43,6 +93,9 @@ cd src/TutorAI.Api
 dotnet user-secrets set "Anthropic:ApiKey"   "<anthropic-key>"
 dotnet user-secrets set "AzureSpeech:Key"    "<speech-key>"
 dotnet user-secrets set "AzureSpeech:Region" "<speech-region, e.g. eastus>"
+dotnet user-secrets set "Auth:JwtSigningKey" "<32+ random characters>"
+dotnet user-secrets set "Auth:AdminPassword" "<admin password>"
+dotnet user-secrets set "Auth:GuestPassword" "<guest password>"
 dotnet run                                             # http://localhost:5080
 cd ../..
 
@@ -53,6 +106,9 @@ npm run dev                                            # http://localhost:3000
 
 To run locally against the Azure Key Vault instead of user-secrets: `az login`, give your account the
 **Key Vault Secrets User** role on the vault, and set `dotnet user-secrets set "KeyVault:Uri" "https://<vault>.vault.azure.net/"`.
+The launch profile sets `AZURE_TOKEN_CREDENTIALS=dev`, so locally the API signs in with developer
+credentials only (Azure CLI, Visual Studio, ...). Without it, the managed-identity probe, which only
+works inside Azure, adds about two minutes to every startup.
 
 ## Deploy to Azure
 
@@ -143,17 +199,25 @@ $conn = "Server=tcp:$sqlServer.database.windows.net,1433;Database=TutorAI;User I
 az keyvault secret set --vault-name $kv -n "ConnectionStrings--TutorAI" --value $conn | Out-Null
 ```
 
-### 6. Anthropic API key
+### 6. Anthropic API key and sign-in secrets
 
 ```powershell
 az keyvault secret set --vault-name $kv -n "Anthropic--ApiKey" --value "<anthropic-key>" | Out-Null
+
+# A random JWT signing key; nobody needs to know it.
+$bytes = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+az keyvault secret set --vault-name $kv -n "Auth--JwtSigningKey" --value ([Convert]::ToBase64String($bytes)) | Out-Null
+
+az keyvault secret set --vault-name $kv -n "Auth--AdminPassword" --value "<admin password>" | Out-Null
+az keyvault secret set --vault-name $kv -n "Auth--GuestPassword" --value "<guest password>" | Out-Null
 ```
 
-Check the vault now holds all three secrets:
+Check the vault now holds all six secrets:
 
 ```powershell
 az keyvault secret list --vault-name $kv --query "[].name" -o tsv
-# AzureSpeech--Key, ConnectionStrings--TutorAI, Anthropic--ApiKey
+# Anthropic--ApiKey, Auth--AdminPassword, Auth--GuestPassword, Auth--JwtSigningKey,
+# AzureSpeech--Key, ConnectionStrings--TutorAI
 ```
 
 ### 7. Run the database migrations
@@ -215,9 +279,9 @@ If the API fails to start, it's usually Key Vault access: the role assignment ha
 
 ### 9. Web front end
 
-The Next.js app forwards `/api/*` to the API. `TUTORAI_API_URL` is read by `next.config.ts` when
-the app is **built**, so it must be set before deploying, and the web app must be redeployed if it
-changes. App Service builds the app on deploy (`SCM_DO_BUILD_DURING_DEPLOYMENT`).
+The Next.js app forwards `/api/*` to the API at the address in `TUTORAI_API_URL`, read at request
+time (changing it needs a restart, not a redeploy). App Service builds the app on deploy
+(`SCM_DO_BUILD_DURING_DEPLOYMENT`).
 
 ```powershell
 az webapp create -n $webApp -g $rg -p $plan --runtime "NODE:24-lts"
@@ -234,9 +298,9 @@ The first deploy takes several minutes while `npm install` and `next build` run 
 
 ### 10. Smoke test
 
-1. Open `https://<webApp>.azurewebsites.net`. The site is served over HTTPS, which the browser
-   requires for microphone access.
-2. Start a short conversation, allow the microphone, speak a few turns, and end the session.
+1. Open `https://<webApp>.azurewebsites.net`. You should land on the sign-in page. The site is served
+   over HTTPS, which the browser requires for microphone access.
+2. Sign in as `admin` with the `Auth--AdminPassword` value. Start a short conversation, allow the microphone, speak a few turns, and end the session.
 3. The summary page should show CEFR levels (sessions under 150 learner words are reported as too
    short to grade).
 
@@ -247,10 +311,12 @@ The first deploy takes several minutes while `npm install` and `next build` run 
 | API code | Repeat the publish + `az webapp deploy` in step 8 |
 | Web code | Repeat the zip + `az webapp deploy` in step 9 |
 | New migration script | Re-run step 7 before deploying the API |
-| Rotate a key | `az keyvault secret set ...` with the new value, then `az webapp restart -n $apiApp -g $rg` |
+| Rotate a key or password | `az keyvault secret set ...` with the new value, then `az webapp restart -n $apiApp -g $rg` |
+| Sign everyone out | Rotate `Auth--JwtSigningKey` and restart the API |
 
 ## Hardening (optional)
 
+- **Limit sign-in attempts.** There is no lockout or rate limit on `/api/auth/login` yet.
 - **Lock the API to the web app.** Add an access restriction on the API so only the web app's
   outbound IPs can call it (`az webapp show -n $webApp -g $rg --query outboundIpAddresses`).
 - **Passwordless SQL.** Set a Microsoft Entra admin on the SQL server, create a database user for the

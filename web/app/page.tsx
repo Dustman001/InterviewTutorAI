@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { api, type Mode, type SessionSummary } from "@/lib/api";
+import { api, signOut, type CurrentUser, type Mode, type SessionSummary } from "@/lib/api";
 import { formatDate, scenarioTitle } from "@/lib/format";
 
 const TOPICS = ["Small talk", "Travel", "Work and career", "Technology", "Opinions and debate"];
@@ -25,13 +25,21 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+  const [user, setUser] = useState<CurrentUser | null>(null);
 
   useEffect(() => {
     api
       .listSessions()
       .then(setSessions)
       .catch((e: Error) => setError(e.message));
+    api
+      .me()
+      .then(setUser)
+      .catch((e: Error) => setError(e.message));
   }, []);
+
+  const sessionsLeft = user?.sessionLimit == null ? null : Math.max(0, user.sessionLimit - user.sessionsUsed);
+  const outOfSessions = sessionsLeft === 0;
 
   async function start(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -55,6 +63,22 @@ export default function Home() {
 
   return (
     <main className="shell">
+      {user && (
+        <div className="userbar">
+          <span>
+            Signed in as <strong>{user.username}</strong>
+            {sessionsLeft === null
+              ? " · no session limit"
+              : ` · ${sessionsLeft} of ${user.sessionLimit} sessions left`}
+          </span>
+          <span className="userbar-actions">
+            {user.role === "Admin" && <Link href="/users">Manage users</Link>}
+            <button type="button" onClick={() => void signOut()}>
+              Sign out
+            </button>
+          </span>
+        </div>
+      )}
       <h1>Speech tutor</h1>
       <p className="lead">Practise speaking English out loud, then see where you stand on the CEFR scale.</p>
 
@@ -160,7 +184,10 @@ export default function Home() {
           </label>
         </div>
 
-        <button className="primary" type="submit" disabled={busy}>
+        {outOfSessions && (
+          <p className="hint">This guest account has used all {user?.sessionLimit} of its sessions.</p>
+        )}
+        <button className="primary" type="submit" disabled={busy || outOfSessions}>
           {busy ? "Starting…" : "Start session"}
         </button>
       </form>

@@ -28,9 +28,7 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
         "Next year I want to visit Japan, because I am interested in the culture since many years. I am learning some basic words, but the language is very difficult for me. I hope I can to travel there in the spring, when the trees are with flowers.",
     ];
 
-    private WebApplicationFactory<Program> CreateApi() =>
-        new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
-            builder.UseSetting("ConnectionStrings:TutorAI", database.ConnectionString));
+    private WebApplicationFactory<Program> CreateApi() => TestApi.Create(database.ConnectionString);
 
     [E2EFact]
     public void Migrations_are_journaled_and_reapplying_does_nothing()
@@ -40,17 +38,18 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
 
         Assert.Empty(appliedAgain);
         using var db = database.Open();
-        Assert.Equal(1, db.ExecuteScalar<int>("SELECT COUNT(*) FROM dbo.SchemaVersions"));
+        Assert.Equal(3, db.ExecuteScalar<int>("SELECT COUNT(*) FROM dbo.SchemaVersions"));
         Assert.Equal(
-            3,
-            db.ExecuteScalar<int>("SELECT COUNT(*) FROM sys.tables WHERE name IN ('Sessions', 'Turns', 'Assessments')"));
+            4,
+            db.ExecuteScalar<int>("SELECT COUNT(*) FROM sys.tables WHERE name IN ('Sessions', 'Turns', 'Assessments', 'Users')"));
+        Assert.Equal(1, db.ExecuteScalar<int>("SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Sessions') AND name = 'UserId'"));
     }
 
     [E2EFact]
     public async Task Short_session_is_reported_as_too_short_instead_of_graded()
     {
         await using var api = CreateApi();
-        var client = api.CreateClient();
+        var client = await TestApi.SignInAsync(api, TestApi.AdminUsername, TestApi.AdminPassword);
         var sessionId = await CreateSessionAsync(client);
 
         // Seed the learner's turn directly so this test needs no Claude call.
@@ -81,7 +80,7 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
     public async Task Session_validation_and_listing()
     {
         await using var api = CreateApi();
-        var client = api.CreateClient();
+        var client = await TestApi.SignInAsync(api, TestApi.AdminUsername, TestApi.AdminPassword);
 
         var bad = await client.PostAsJsonAsync("/api/sessions", new { mode = "Karaoke" });
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
@@ -99,7 +98,8 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
     public async Task Azure_assessment_of_real_audio_feeds_the_metrics()
     {
         await using var api = CreateApi();
-        var token = await api.CreateClient().GetFromJsonAsync<JsonElement>("/api/speech/token");
+        var client = await TestApi.SignInAsync(api, TestApi.AdminUsername, TestApi.AdminPassword);
+        var token = await client.GetFromJsonAsync<JsonElement>("/api/speech/token");
         Assert.False(string.IsNullOrWhiteSpace(token.GetProperty("token").GetString()));
 
         var (recognized, phrases) = await SpeakAndAssessAsync(LearnerTurns[0]);
@@ -128,8 +128,8 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
     public async Task Typed_conversation_is_graded_by_claude_without_pronunciation()
     {
         await using var api = CreateApi();
-        var client = api.CreateClient();
-        client.Timeout = TimeSpan.FromMinutes(5);
+        var client = await TestApi.SignInAsync(
+            api, TestApi.AdminUsername, TestApi.AdminPassword, timeout: TimeSpan.FromMinutes(5));
         var sessionId = await CreateSessionAsync(client);
 
         Assert.False(string.IsNullOrWhiteSpace(await PostTurnAsync(client, sessionId, new { })));
@@ -153,8 +153,8 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
     public async Task Spoken_conversation_gets_all_five_levels()
     {
         await using var api = CreateApi();
-        var client = api.CreateClient();
-        client.Timeout = TimeSpan.FromMinutes(5);
+        var client = await TestApi.SignInAsync(
+            api, TestApi.AdminUsername, TestApi.AdminPassword, timeout: TimeSpan.FromMinutes(5));
 
         var token = await client.GetFromJsonAsync<JsonElement>("/api/speech/token");
         Assert.False(string.IsNullOrWhiteSpace(token.GetProperty("token").GetString()));

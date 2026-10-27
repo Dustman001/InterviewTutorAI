@@ -108,6 +108,31 @@ export interface SpeechToken {
   voice: string;
 }
 
+export interface CurrentUser {
+  username: string;
+  role: "Admin" | "Guest";
+  /** null when the user has no limit. */
+  sessionLimit: number | null;
+  sessionsUsed: number;
+}
+
+export interface AdminUser {
+  id: number;
+  username: string;
+  role: "Admin" | "Guest";
+  sessionLimit: number | null;
+  sessionsUsed: number;
+  isDisabled: boolean;
+  createdAt: string;
+}
+
+export interface NewUser {
+  username: string;
+  password: string;
+  role: "Admin" | "Guest";
+  sessionLimit: number | null;
+}
+
 export interface TurnPayload {
   text: string;
   durationMs?: number;
@@ -115,14 +140,31 @@ export interface TurnPayload {
   phrases?: unknown[];
 }
 
+/** The sign-in expired or is missing: go to the sign-in page and come back here afterwards. */
+function redirectToLogin(): never {
+  const here = window.location.pathname + window.location.search;
+  // A full page load on purpose: nothing from the signed-out state should survive.
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+  window.location.assign(`/login?next=${encodeURIComponent(here)}`);
+  throw new Error("Your sign-in has expired.");
+}
+
+export async function signOut(): Promise<void> {
+  await fetch("/auth/logout", { method: "POST" });
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+  window.location.assign("/login");
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
+  if (response.status === 401) redirectToLogin();
   if (!response.ok) {
     throw new Error(await errorMessage(response));
   }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
@@ -145,6 +187,19 @@ export const api = {
   getSession: (id: string) => request<SessionDetail>(`/api/sessions/${id}`),
   endSession: (id: string) => request<Assessment>(`/api/sessions/${id}/end`, { method: "POST" }),
   speechToken: () => request<SpeechToken>("/api/speech/token"),
+  me: () => request<CurrentUser>("/api/auth/me"),
+};
+
+/** Admin-only user management. */
+export const users = {
+  list: () => request<AdminUser[]>("/api/users"),
+  create: (user: NewUser) => request<AdminUser>("/api/users", { method: "POST", body: JSON.stringify(user) }),
+  update: (id: number, changes: { role?: string; sessionLimit?: number | null; isDisabled?: boolean }) =>
+    request<AdminUser>(`/api/users/${id}`, { method: "PUT", body: JSON.stringify(changes) }),
+  setPassword: (id: number, password: string) =>
+    request<void>(`/api/users/${id}/password`, { method: "POST", body: JSON.stringify({ password }) }),
+  resetSessions: (id: number) => request<AdminUser>(`/api/users/${id}/reset-sessions`, { method: "POST" }),
+  remove: (id: number) => request<void>(`/api/users/${id}`, { method: "DELETE" }),
 };
 
 /**
@@ -163,6 +218,7 @@ export async function streamTurn(
     body: JSON.stringify(payload ?? {}),
     signal,
   });
+  if (response.status === 401) redirectToLogin();
   if (!response.ok || !response.body) {
     throw new Error(await errorMessage(response));
   }

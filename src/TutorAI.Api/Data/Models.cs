@@ -44,6 +44,8 @@ public sealed class SessionRow
     public DateTime StartedAt { get; set; }
     public DateTime? EndedAt { get; set; }
     public string Status { get; set; } = SessionStatus.Active;
+    /// <summary>NULL for sessions created before sign-in existed.</summary>
+    public int? UserId { get; set; }
 }
 
 public sealed class TurnRow

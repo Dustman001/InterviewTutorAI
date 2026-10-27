@@ -16,16 +16,27 @@ public sealed class SessionRepository(IConfiguration configuration)
         return await db.ExecuteScalarAsync<int>(new CommandDefinition("SELECT 1", cancellationToken: ct)) == 1;
     }
 
-    public async Task<SessionRow> CreateSessionAsync(string mode, string scenarioJson, CancellationToken ct)
+    /// <summary>
+    /// Creates a session owned by the user, unless that user has reached their session limit,
+    /// in which case it returns null. The count and insert run as one statement so parallel
+    /// requests cannot overshoot the limit.
+    /// </summary>
+    public async Task<SessionRow?> CreateSessionAsync(int userId, string mode, string scenarioJson, CancellationToken ct)
     {
         await using var db = Open();
-        return await db.QuerySingleAsync<SessionRow>(new CommandDefinition(
+        return await db.QuerySingleOrDefaultAsync<SessionRow>(new CommandDefinition(
             """
-            INSERT INTO dbo.Sessions (Id, Mode, ScenarioJson)
+            INSERT INTO dbo.Sessions (Id, Mode, ScenarioJson, UserId)
             OUTPUT inserted.*
-            VALUES (NEWID(), @mode, @scenarioJson)
+            SELECT NEWID(), @mode, @scenarioJson, u.Id
+            FROM dbo.Users u
+            WHERE u.Id = @userId
+              AND u.IsDisabled = 0
+              AND (u.SessionLimit IS NULL
+                   OR (SELECT COUNT(*) FROM dbo.Sessions s WITH (UPDLOCK, HOLDLOCK)
+                       WHERE s.UserId = u.Id AND s.StartedAt >= ISNULL(u.SessionsResetAt, '0001-01-01')) < u.SessionLimit)
             """,
-            new { mode, scenarioJson }, cancellationToken: ct));
+            new { userId, mode, scenarioJson }, cancellationToken: ct));
     }
 
     public async Task<SessionRow?> GetSessionAsync(Guid id, CancellationToken ct)
@@ -35,7 +46,8 @@ public sealed class SessionRepository(IConfiguration configuration)
             "SELECT * FROM dbo.Sessions WHERE Id = @id", new { id }, cancellationToken: ct));
     }
 
-    public async Task<IReadOnlyList<SessionListRow>> ListSessionsAsync(CancellationToken ct)
+    /// <param name="userId">Only this user's sessions; null lists everyone's (admin).</param>
+    public async Task<IReadOnlyList<SessionListRow>> ListSessionsAsync(int? userId, CancellationToken ct)
     {
         await using var db = Open();
         var rows = await db.QueryAsync<SessionListRow>(new CommandDefinition(
@@ -44,9 +56,10 @@ public sealed class SessionRepository(IConfiguration configuration)
                    a.Fluency, a.Grammar, a.Vocabulary, a.Interaction, a.Pronunciation, a.Overall
             FROM dbo.Sessions s
             LEFT JOIN dbo.Assessments a ON a.SessionId = s.Id
+            WHERE @userId IS NULL OR s.UserId = @userId
             ORDER BY s.StartedAt DESC
             """,
-            cancellationToken: ct));
+            new { userId }, cancellationToken: ct));
         return rows.AsList();
     }
 
