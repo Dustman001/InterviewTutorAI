@@ -421,7 +421,7 @@ session.
 
 ## Open questions
 
-1. **CI host:** GitHub or Azure DevOps? (P15)
+1. **CI host:** decided, GitHub Actions (`.github/workflows/ci.yml`). (P15)
 2. **Labelled transcripts:** who rates the calibration sessions, and how many can they do? (P13)
 3. **Share links:** decided 2026-10-29, printing is enough; P12 phase B is dropped.
 4. **Cost limits:** decided 2026-10-29, keep the shipped defaults (150 learner turns, 4000 characters and
