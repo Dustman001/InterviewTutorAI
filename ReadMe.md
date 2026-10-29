@@ -82,6 +82,47 @@ the new value. That's the way back in if the admin password is lost.
    every request. That's how disabling a user, resetting a password or changing a role takes effect
    immediately instead of when the token expires.
 
+## How sessions are evaluated
+
+Ending a session (`POST /api/sessions/{id}/end`) grades it on the CEFR scale: A1, A2, A2+, B1, B1+, B2,
+B2+, C1, C2. The grade combines measurements taken from the audio with a Claude examiner reading the
+transcript. Code: `src/TutorAI.Api/Assessment`.
+
+1. **Evidence collected during the session.** Azure AI Speech transcribes each learner turn and runs
+   pronunciation assessment on it: accuracy and prosody scores, plus per-word timings and error types.
+   Only the learner's turns are measured and graded.
+2. **Minimum amount of speech.** Below 150 learner words (`Assessment:MinUserWords`), the session is
+   reported as too short and no levels are given.
+3. **Measurements computed in code.**
+   - Fluency (`FluencyMetrics`), from word timings: words per minute, pause ratio (gaps of 0.25 s or
+     more), long pauses (1 s or more) per minute, mean words between pauses, fillers ("um", "uh", ...)
+     per 100 words, and Azure's fluency score.
+   - Pronunciation (`PronunciationAggregator`): composite = 0.6 × accuracy + 0.4 × prosody, plus up to
+     10 weakest words (accuracy below 60 or flagged as mispronounced).
+4. **Grading.**
+   - **Fluency, Grammar, Vocabulary and Interaction** are graded by Claude (`Anthropic:GradingModel`,
+     `claude-opus-5-5` by default, high effort) acting as a CEFR oral examiner (`CefrGrader`). The
+     prompt:
+     - gives it the CEFR descriptors for each criterion and the fluency measurements;
+     - treats speaking rate as a rough guide only (about 90 wpm or less suggests A2-B1, 110-140 B2,
+       140+ C1-C2);
+     - tells it to ignore punctuation from speech recognition and likely mis-recognitions;
+     - in interview mode, also asks whether answers address the question and are developed.
+
+     The reply is held to a JSON schema. For each criterion it gives a level, a confidence (low, medium
+     or high), 2-4 verbatim learner quotes as evidence, and advice for reaching the next level. It also
+     gives a short summary and up to 6 corrections.
+   - **Pronunciation** is mapped from the composite score (`CefrMapper`): 95+ C2, 90+ C1, 85+ B2+,
+     80+ B2, 74+ B1+, 68+ B1, 60+ A2+, 50+ A2, otherwise A1. These thresholds are a heuristic; Azure
+     publishes no CEFR mapping. Sessions with no assessed audio (typed input only) get no pronunciation
+     level.
+5. **Overall level.** The median of the available levels, taking the lower middle for an even count.
+   A single outlying criterion doesn't swing the result.
+
+The result, with the measurements and Claude's detailed output, is stored in `dbo.Assessments` and
+shown on the session summary page. Ending the same session again returns the stored result. Pass
+`?regrade=true` to grade it again.
+
 ## Run locally
 
 ```powershell
