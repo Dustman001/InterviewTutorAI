@@ -46,20 +46,32 @@ public sealed class SessionRepository(IConfiguration configuration)
             "SELECT * FROM dbo.Sessions WHERE Id = @id", new { id }, cancellationToken: ct));
     }
 
+    /// <summary>
+    /// One page of sessions, newest first (keyset pagination on StartedAt, then Id). Returns up to
+    /// <paramref name="limit"/> + 1 rows: an extra row means there is another page.
+    /// </summary>
     /// <param name="userId">Only this user's sessions; null lists everyone's (admin).</param>
-    public async Task<IReadOnlyList<SessionListRow>> ListSessionsAsync(int? userId, CancellationToken ct)
+    /// <param name="before">The last row of the previous page, or null for the first page.</param>
+    public async Task<IReadOnlyList<SessionListRow>> ListSessionsAsync(
+        int? userId, SessionCursor? before, int limit, CancellationToken ct)
     {
+        // Separate statements per case, so each can seek on its index instead of one plan with OR branches.
+        var owner = userId is null ? "" : "s.UserId = @userId AND";
+        var after = before is null ? "1 = 1" : "s.StartedAt <= @startedAt AND (s.StartedAt < @startedAt OR s.Id < @id)";
+        var parameters = new DynamicParameters(new { userId, id = before?.Id, take = limit + 1 });
+        // datetime2, not Dapper's default datetime: datetime rounds to ~3 ms and would skip or repeat rows at a page edge.
+        parameters.Add("startedAt", before?.StartedAt, System.Data.DbType.DateTime2);
         await using var db = Open();
         var rows = await db.QueryAsync<SessionListRow>(new CommandDefinition(
-            """
-            SELECT TOP (200) s.Id, s.Mode, s.ScenarioJson, s.StartedAt, s.EndedAt, s.Status,
+            $"""
+            SELECT TOP (@take) s.Id, s.Mode, s.ScenarioJson, s.StartedAt, s.EndedAt, s.Status, s.GradingState,
                    a.Fluency, a.Grammar, a.Vocabulary, a.Interaction, a.Pronunciation, a.Overall
             FROM dbo.Sessions s
             LEFT JOIN dbo.Assessments a ON a.SessionId = s.Id
-            WHERE @userId IS NULL OR s.UserId = @userId
-            ORDER BY s.StartedAt DESC
+            WHERE {owner} {after}
+            ORDER BY s.StartedAt DESC, s.Id DESC
             """,
-            new { userId }, cancellationToken: ct));
+            parameters, cancellationToken: ct));
         return rows.AsList();
     }
 
@@ -275,5 +287,36 @@ public sealed class SessionRepository(IConfiguration configuration)
 }
 
 public sealed record GradingClaim(Guid SessionId, int Attempt);
+
+/// <summary>Where a session list page ends. Opaque to clients: base64 of the row's StartedAt ticks and Id.</summary>
+public sealed record SessionCursor(DateTime StartedAt, Guid Id)
+{
+    public string Encode() =>
+        Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{StartedAt.Ticks}:{Id:N}"))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    public static SessionCursor? TryDecode(string? value)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length > 100)
+        {
+            return null;
+        }
+
+        try
+        {
+            var base64 = value.Replace('-', '+').Replace('_', '/');
+            base64 = base64.PadRight(base64.Length + (4 - base64.Length % 4) % 4, '=');
+            var parts = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(base64)).Split(':');
+            return parts.Length == 2 && long.TryParse(parts[0], out var ticks) && ticks >= 0 && ticks <= DateTime.MaxValue.Ticks
+                   && Guid.TryParseExact(parts[1], "N", out var id)
+                ? new SessionCursor(new DateTime(ticks, DateTimeKind.Unspecified), id)
+                : null;
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+}
 
 public sealed record UserModelUsage(int UserId, string Model, long Input, long Output, long CacheRead, long CacheWrite);

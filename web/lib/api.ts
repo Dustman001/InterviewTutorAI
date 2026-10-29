@@ -32,6 +32,13 @@ export interface Levels {
 
 export interface SessionSummary extends Session {
   levels: Levels | null;
+  gradingState: GradingState | null;
+}
+
+export interface SessionPage {
+  items: SessionSummary[];
+  /** Pass as `before` for the next page; null on the last page. */
+  nextCursor: string | null;
 }
 
 export interface Turn {
@@ -217,7 +224,8 @@ async function apiError(response: Response): Promise<ApiError> {
 export const api = {
   createSession: (mode: Mode, scenario: Scenario) =>
     request<Session>("/api/sessions", { method: "POST", body: JSON.stringify({ mode, scenario }) }),
-  listSessions: () => request<SessionSummary[]>("/api/sessions"),
+  listSessions: (before?: string | null) =>
+    request<SessionPage>(before ? `/api/sessions?before=${encodeURIComponent(before)}` : "/api/sessions"),
   getSession: (id: string) => request<SessionDetail>(`/api/sessions/${id}`),
   /** The assessment when it's ready (200), otherwise the grading state (202): poll getSession until it's done. */
   endSession: (id: string) =>

@@ -103,7 +103,7 @@ public sealed class UserAdminTests(ThrowawayDatabase database) : IClassFixture<T
 
         Assert.Equal(HttpStatusCode.Created, (await StartAsync(user)).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await StartAsync(user)).StatusCode);
-        var history = await user.GetFromJsonAsync<JsonElement>("/api/sessions");
+        var history = (await user.GetFromJsonAsync<JsonElement>("/api/sessions")).GetProperty("items");
         Assert.Equal(2, history.GetArrayLength());
     }
 

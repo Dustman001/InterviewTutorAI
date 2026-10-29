@@ -88,7 +88,7 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/sessions/{Guid.NewGuid()}")).StatusCode);
 
         var sessionId = await CreateSessionAsync(client);
-        var list = await client.GetFromJsonAsync<JsonElement>("/api/sessions");
+        var list = (await client.GetFromJsonAsync<JsonElement>("/api/sessions")).GetProperty("items");
         Assert.Contains(list.EnumerateArray(), s => s.GetProperty("id").GetGuid() == sessionId);
 
         var health = await client.GetFromJsonAsync<JsonElement>("/api/health");

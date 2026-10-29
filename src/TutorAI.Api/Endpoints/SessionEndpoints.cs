@@ -14,7 +14,11 @@ namespace TutorAI.Api.Endpoints;
 public sealed record SessionDto(Guid Id, string Mode, Scenario Scenario, DateTime StartedAt, DateTime? EndedAt, string Status);
 
 public sealed record SessionSummaryDto(
-    Guid Id, string Mode, Scenario Scenario, DateTime StartedAt, DateTime? EndedAt, string Status, AssessmentLevels? Levels);
+    Guid Id, string Mode, Scenario Scenario, DateTime StartedAt, DateTime? EndedAt, string Status, AssessmentLevels? Levels,
+    string? GradingState);
+
+/// <param name="NextCursor">Pass as <c>before</c> to get the next page; null on the last page.</param>
+public sealed record SessionPageDto(IReadOnlyList<SessionSummaryDto> Items, string? NextCursor);
 
 public sealed record TurnDto(
     long Id, int Seq, string Role, string Text, DateTime StartedAt, int? DurationMs, int WordCount,
@@ -32,6 +36,9 @@ public static class SessionEndpoints
     public const string TurnsPolicy = "turns";
 
     private static readonly JsonSerializerOptions Json = JsonSerializerOptions.Web;
+
+    public const int DefaultPageSize = 50;
+    public const int MaxPageSize = 100;
 
     public static void MapSessionEndpoints(this IEndpointRouteBuilder app)
     {
@@ -78,14 +85,27 @@ public static class SessionEndpoints
             return Results.Created($"/api/sessions/{row.Id}", ToDto(row));
         });
 
-        sessions.MapGet("/", async (ClaimsPrincipal user, SessionRepository repository, CancellationToken ct) =>
+        sessions.MapGet("/", async (
+            ClaimsPrincipal user, SessionRepository repository, int? limit, string? before, CancellationToken ct) =>
         {
-            var rows = await repository.ListSessionsAsync(user.IsAdmin() ? null : user.UserId(), ct);
-            return rows.Select(r => new SessionSummaryDto(
-                r.Id, r.Mode, ParseScenario(r.ScenarioJson), Utc(r.StartedAt), Utc(r.EndedAt), r.Status,
-                r.Overall is null
-                    ? null
-                    : new AssessmentLevels(r.Fluency, r.Grammar, r.Vocabulary, r.Interaction, r.Pronunciation, r.Overall)));
+            var cursor = SessionCursor.TryDecode(before);
+            if (before is not null && cursor is null)
+            {
+                return Results.BadRequest(new { error = "Invalid 'before' cursor." });
+            }
+
+            var take = Math.Clamp(limit ?? DefaultPageSize, 1, MaxPageSize);
+            var rows = await repository.ListSessionsAsync(user.IsAdmin() ? null : user.UserId(), cursor, take, ct);
+            var page = rows.Take(take).ToList();
+            var next = rows.Count > take ? new SessionCursor(page[^1].StartedAt, page[^1].Id).Encode() : null;
+            return Results.Ok(new SessionPageDto(
+                [.. page.Select(r => new SessionSummaryDto(
+                    r.Id, r.Mode, ParseScenario(r.ScenarioJson), Utc(r.StartedAt), Utc(r.EndedAt), r.Status,
+                    r.Overall is null
+                        ? null
+                        : new AssessmentLevels(r.Fluency, r.Grammar, r.Vocabulary, r.Interaction, r.Pronunciation, r.Overall),
+                    r.GradingState))],
+                next));
         });
 
         sessions.MapGet("/{id:guid}", async (

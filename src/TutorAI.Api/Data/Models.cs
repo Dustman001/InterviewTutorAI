@@ -113,6 +113,7 @@ public sealed class SessionListRow
     public DateTime StartedAt { get; set; }
     public DateTime? EndedAt { get; set; }
     public string Status { get; set; } = "";
+    public string? GradingState { get; set; }
     public string? Fluency { get; set; }
     public string? Grammar { get; set; }
     public string? Vocabulary { get; set; }

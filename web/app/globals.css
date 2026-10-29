@@ -737,3 +737,8 @@ details.card > summary {
   cursor: pointer;
   font-weight: 600;
 }
+
+.load-more {
+  display: block;
+  margin: 0.75rem auto 0;
+}

@@ -25,12 +25,17 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [user, setUser] = useState<CurrentUser | null>(null);
 
   useEffect(() => {
     api
       .listSessions()
-      .then(setSessions)
+      .then((page) => {
+        setSessions(page.items);
+        setNextCursor(page.nextCursor);
+      })
       .catch((e: Error) => setError(e.message));
     api
       .me()
@@ -40,6 +45,20 @@ export default function Home() {
 
   const sessionsLeft = user?.sessionLimit == null ? null : Math.max(0, user.sessionLimit - user.sessionsUsed);
   const outOfSessions = sessionsLeft === 0;
+
+  async function loadMore() {
+    if (!nextCursor) return;
+    setLoadingMore(true);
+    try {
+      const page = await api.listSessions(nextCursor);
+      setSessions((current) => [...(current ?? []), ...page.items]);
+      setNextCursor(page.nextCursor);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load more sessions.");
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   async function start(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -215,13 +234,24 @@ export default function Home() {
                     </span>
                   </>
                 ) : (
-                  <span className="meta">{s.status === "Active" ? "In progress" : "Not graded"}</span>
+                  <span className="meta">
+                    {s.status === "Active"
+                      ? "In progress"
+                      : s.gradingState === "Pending" || s.gradingState === "Running"
+                        ? "Scoring…"
+                        : "Not graded"}
+                  </span>
                 )}
               </span>
             </Link>
           </li>
         ))}
       </ul>
+      {nextCursor && (
+        <button type="button" className="ghost load-more" onClick={() => void loadMore()} disabled={loadingMore}>
+          {loadingMore ? "Loading…" : "Load more"}
+        </button>
+      )}
     </main>
   );
 }
