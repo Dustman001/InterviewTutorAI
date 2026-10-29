@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.Options;
 using TutorAI.Api.Assessment;
 using TutorAI.Api.Auth;
 using TutorAI.Api.Conversation;
@@ -23,6 +24,9 @@ public sealed record SessionDetailDto(SessionDto Session, IReadOnlyList<TurnDto>
 
 public static class SessionEndpoints
 {
+    /// <summary>Rate-limit policy for turn requests, partitioned by user (see Program.cs).</summary>
+    public const string TurnsPolicy = "turns";
+
     private static readonly JsonSerializerOptions Json = JsonSerializerOptions.Web;
 
     public static void MapSessionEndpoints(this IEndpointRouteBuilder app)
@@ -31,7 +35,7 @@ public static class SessionEndpoints
 
         sessions.MapPost("/", async (
             CreateSessionRequest request, ClaimsPrincipal user, SessionRepository repository, UserRepository users,
-            CancellationToken ct) =>
+            IOptions<SessionLimitsOptions> limits, CancellationToken ct) =>
         {
             if (!SessionModes.IsValid(request.Mode))
             {
@@ -39,6 +43,10 @@ public static class SessionEndpoints
             }
 
             var scenario = request.Scenario ?? new Scenario();
+            if (SessionRules.ScenarioProblem(scenario, limits.Value) is { } problem)
+            {
+                return Results.BadRequest(new { error = problem });
+            }
             var row = await repository.CreateSessionAsync(user.UserId(), request.Mode, JsonSerializer.Serialize(scenario, Json), ct);
             if (row is null)
             {
@@ -75,7 +83,7 @@ public static class SessionEndpoints
             return Results.Ok(new SessionDetailDto(ToDto(session), [.. turns.Select(ToDto)], await assessments.GetAsync(id, ct)));
         });
 
-        sessions.MapPost("/{id:guid}/turns", PostTurnAsync);
+        sessions.MapPost("/{id:guid}/turns", PostTurnAsync).RequireRateLimiting(TurnsPolicy);
 
         sessions.MapPost("/{id:guid}/end", async (
             Guid id, bool? regrade, ClaimsPrincipal user, SessionRepository repository, AssessmentService assessments,
@@ -99,7 +107,7 @@ public static class SessionEndpoints
     /// </summary>
     private static async Task<IResult> PostTurnAsync(
         Guid id, TurnRequest request, HttpContext http, SessionRepository repository, TutorChat chat,
-        ILoggerFactory loggerFactory, CancellationToken ct)
+        IOptions<SessionLimitsOptions> limits, TimeProvider clock, ILoggerFactory loggerFactory, CancellationToken ct)
     {
         var session = await repository.GetSessionAsync(id, ct);
         if (!CanAccess(http.User, session))
@@ -114,6 +122,13 @@ public static class SessionEndpoints
 
         var turns = (await repository.GetTurnsAsync(id, includePronunciationJson: false, ct)).ToList();
         var text = request.Text?.Trim();
+        if (SessionRules.CheckTurn(
+                session, ParseScenario(session.ScenarioJson), turns, string.IsNullOrEmpty(text) ? null : text,
+                request.Phrases?.Length ?? 0, clock.GetUtcNow().UtcDateTime, limits.Value) is { } rejection)
+        {
+            return Results.Json(new { error = rejection.Error, code = rejection.Code }, statusCode: rejection.StatusCode);
+        }
+
         if (string.IsNullOrEmpty(text))
         {
             if (turns.Count > 0)
@@ -149,7 +164,7 @@ public static class SessionEndpoints
         string? error = null;
         try
         {
-            await foreach (var fragment in chat.StreamReplyAsync(session, turns, ct))
+            await foreach (var fragment in chat.StreamReplyAsync(session, turns, ct: ct))
             {
                 reply.Append(fragment);
                 await WriteEventAsync(http, "delta", new { text = fragment }, ct);

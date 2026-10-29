@@ -38,7 +38,8 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
 
         Assert.Empty(appliedAgain);
         using var db = database.Open();
-        Assert.Equal(3, db.ExecuteScalar<int>("SELECT COUNT(*) FROM dbo.SchemaVersions"));
+        var scripts = typeof(Migrator).Assembly.GetManifestResourceNames().Count(n => n.EndsWith(".sql", StringComparison.Ordinal));
+        Assert.Equal(scripts, db.ExecuteScalar<int>("SELECT COUNT(*) FROM dbo.SchemaVersions"));
         Assert.Equal(
             4,
             db.ExecuteScalar<int>("SELECT COUNT(*) FROM sys.tables WHERE name IN ('Sessions', 'Turns', 'Assessments', 'Users')"));

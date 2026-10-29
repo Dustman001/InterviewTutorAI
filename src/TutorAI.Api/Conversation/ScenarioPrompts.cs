@@ -40,7 +40,7 @@ public static class ScenarioPrompts
                 Position: {role}
                 Seniority: {Value(scenario.Seniority, "not specified")}
                 Interview type: {Value(scenario.InterviewType, "behavioral")}
-                Planned length: about {Duration(scenario)} minutes
+                Planned length: about {PlannedMinutes(scenario)} minutes
                 """);
             if (!string.IsNullOrWhiteSpace(scenario.JobDescription))
             {
@@ -69,7 +69,7 @@ public static class ScenarioPrompts
                 a natural conversation.
 
                 Topic: {Value(scenario.Topic, "anything the learner would like to talk about; ask what is on their mind")}
-                Planned length: about {Duration(scenario)} minutes
+                Planned length: about {PlannedMinutes(scenario)} minutes
 
                 How to run it:
                 - Open with a short, warm greeting and a first question on the topic.
@@ -96,7 +96,11 @@ public static class ScenarioPrompts
             "Language level: speak naturally at a moderate level, as you would to a competent non-native speaker.",
     };
 
-    private static int Duration(Scenario scenario) => scenario.DurationMinutes is > 0 and <= 120 ? scenario.DurationMinutes : 10;
+    /// <summary>
+    /// The session's planned length. New sessions are validated on creation; this also bounds older rows
+    /// so a stored out-of-range value can't stretch a session indefinitely.
+    /// </summary>
+    public static int PlannedMinutes(Scenario scenario) => scenario.DurationMinutes is > 0 and <= 120 ? scenario.DurationMinutes : 10;
 
     private static string Value(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
 }

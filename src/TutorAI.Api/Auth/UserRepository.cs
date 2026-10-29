@@ -24,6 +24,9 @@ public sealed class UserRow
     public DateTime? SessionsResetAt { get; set; }
     public string? ConfigPasswordHash { get; set; }
     public DateTime CreatedAt { get; set; }
+    public int FailedLoginCount { get; set; }
+    /// <summary>UTC. Sign-in is refused until then.</summary>
+    public DateTime? LockedUntil { get; set; }
 }
 
 public sealed class UserListRow
@@ -40,7 +43,8 @@ public sealed class UserListRow
 public sealed class UserRepository(IConfiguration configuration)
 {
     private const string Columns =
-        "Id, Username, PasswordHash, Role, SessionLimit, IsDisabled, TokenVersion, SessionsResetAt, ConfigPasswordHash, CreatedAt";
+        "Id, Username, PasswordHash, Role, SessionLimit, IsDisabled, TokenVersion, SessionsResetAt, ConfigPasswordHash, CreatedAt, " +
+        "FailedLoginCount, LockedUntil";
 
     /// <summary>Sessions that count towards the limit: those started since the last reset.</summary>
     internal const string CountedSessionsFilter = "s.UserId = u.Id AND s.StartedAt >= ISNULL(u.SessionsResetAt, '0001-01-01')";
@@ -108,10 +112,50 @@ public sealed class UserRepository(IConfiguration configuration)
             UPDATE dbo.Users
             SET PasswordHash = @passwordHash,
                 ConfigPasswordHash = ISNULL(@configPasswordHash, ConfigPasswordHash),
-                TokenVersion = TokenVersion + CASE WHEN @signOut = 1 THEN 1 ELSE 0 END
+                TokenVersion = TokenVersion + CASE WHEN @signOut = 1 THEN 1 ELSE 0 END,
+                FailedLoginCount = 0,
+                LockedUntil = NULL
             WHERE Id = @id
             """,
             new { id, passwordHash, configPasswordHash, signOut }, cancellationToken: ct));
+    }
+
+    /// <summary>
+    /// Counts a failed sign-in. From the <paramref name="threshold"/>th failure in a row the account is locked:
+    /// <paramref name="baseSeconds"/> at first, doubling with each further failure, at most <paramref name="maxSeconds"/>.
+    /// Returns the lock's end, or null when the account is not locked. One statement, so parallel attempts all count.
+    /// </summary>
+    public async Task<DateTime?> RecordFailedLoginAsync(
+        int id, DateTime utcNow, int threshold, int baseSeconds, int maxSeconds, CancellationToken ct)
+    {
+        await using var db = Open();
+        // Right-hand side column references read the values from before this update.
+        return await db.QuerySingleOrDefaultAsync<DateTime?>(new CommandDefinition(
+            """
+            UPDATE dbo.Users
+            SET FailedLoginCount = FailedLoginCount + 1,
+                LockedUntil = CASE
+                    WHEN FailedLoginCount + 1 < @threshold THEN LockedUntil
+                    WHEN FailedLoginCount + 1 - @threshold >= 20 THEN DATEADD(second, @maxSeconds, @utcNow)
+                    WHEN @baseSeconds * POWER(CAST(2 AS BIGINT), FailedLoginCount + 1 - @threshold) >= @maxSeconds
+                        THEN DATEADD(second, @maxSeconds, @utcNow)
+                    ELSE DATEADD(second, @baseSeconds * POWER(2, FailedLoginCount + 1 - @threshold), @utcNow)
+                END
+            OUTPUT inserted.LockedUntil
+            WHERE Id = @id
+            """,
+            new { id, utcNow, threshold, baseSeconds, maxSeconds }, cancellationToken: ct));
+    }
+
+    public async Task ClearFailedLoginsAsync(int id, CancellationToken ct)
+    {
+        await using var db = Open();
+        await db.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE dbo.Users SET FailedLoginCount = 0, LockedUntil = NULL
+            WHERE Id = @id AND (FailedLoginCount > 0 OR LockedUntil IS NOT NULL)
+            """,
+            new { id }, cancellationToken: ct));
     }
 
     public async Task SetConfigPasswordHashAsync(int id, string configPasswordHash, CancellationToken ct)

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, streamTurn, type Session, type TurnPayload } from "@/lib/api";
+import { api, ApiError, streamTurn, TURN_LIMITS, type Session, type TurnPayload } from "@/lib/api";
 import { SentenceBuffer, SpeechEngine } from "@/lib/speech";
 import { scenarioTitle } from "@/lib/format";
 
@@ -22,6 +22,11 @@ const PAUSE_OPTIONS = [
   { label: "Long", ms: 3000 },
 ];
 const PAUSE_STORAGE_KEY = "tutorai.turnPauseMs";
+// The API refuses turns past these; a long monologue is sent early instead (leaves room for one more phrase).
+const SEND_EARLY_CHARS = TURN_LIMITS.maxChars - 400;
+const SEND_EARLY_PHRASES = TURN_LIMITS.maxPhrases - 5;
+// The API's codes for a session that can't take more turns; the page ends and scores it.
+const SESSION_OVER_CODES = ["time_up", "turn_limit"];
 
 export default function LiveSession({ id }: { id: string }) {
   const router = useRouter();
@@ -83,6 +88,12 @@ export default function LiveSession({ id }: { id: string }) {
         sentences.flush();
         await engine?.whenSpeechDone();
       } catch (e) {
+        if (e instanceof ApiError && e.code && SESSION_OVER_CODES.includes(e.code)) {
+          setLines((all) => all.filter((line) => line.key !== key));
+          setError(`${e.message} Scoring the session now.`);
+          void handlersRef.current.end();
+          return;
+        }
         if (!controller.signal.aborted) {
           setError(e instanceof Error ? e.message : "The tutor could not reply.");
         }
@@ -119,11 +130,11 @@ export default function LiveSession({ id }: { id: string }) {
   }, [sendTurn]);
 
   // The speech callbacks outlive renders, so they reach the current handlers through a ref.
-  const handlersRef = useRef({ finalizeSpokenTurn });
+  const handlersRef = useRef({ finalizeSpokenTurn, end: async () => {} });
   useEffect(() => {
-    handlersRef.current = { finalizeSpokenTurn };
+    handlersRef.current = { finalizeSpokenTurn, end };
     pauseRef.current = pauseMs;
-  }, [finalizeSpokenTurn, pauseMs]);
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -180,9 +191,14 @@ export default function LiveSession({ id }: { id: string }) {
           pending.startedAt ??= Date.now();
           pending.texts.push(text);
           if (detail) pending.phrases.push(detail);
-          setDraft(pending.texts.join(" "));
+          const joined = pending.texts.join(" ");
+          setDraft(joined);
           setInterim("");
           clearTurnTimer();
+          if (joined.length >= SEND_EARLY_CHARS || pending.phrases.length >= SEND_EARLY_PHRASES) {
+            handlersRef.current.finalizeSpokenTurn();
+            return;
+          }
           timerRef.current = setTimeout(() => handlersRef.current.finalizeSpokenTurn(), pauseRef.current);
         },
         onError: setError,
@@ -317,6 +333,7 @@ export default function LiveSession({ id }: { id: string }) {
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
               placeholder="Or type your turn…"
+              maxLength={TURN_LIMITS.maxChars}
               disabled={phase === "tutor"}
               aria-label="Type your turn"
             />

@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Options;
 using TutorAI.Api.Auth;
 
 namespace TutorAI.Api.Endpoints;
@@ -13,13 +14,16 @@ public sealed record LoginResponse(string Token, DateTime ExpiresAt, UserDto Use
 
 public static class AuthEndpoints
 {
+    /// <summary>Rate-limit policy for sign-in attempts across all users (see Program.cs).</summary>
+    public const string LoginPolicy = "login";
+
     public static void MapAuthEndpoints(this IEndpointRouteBuilder app)
     {
         var auth = app.MapGroup("/api/auth");
 
         auth.MapPost("/login", async (
-            LoginRequest request, UserSeeder seeder, UserRepository users, IPasswordHasher<UserRow> hasher,
-            TokenService tokens, CancellationToken ct) =>
+            LoginRequest request, HttpContext http, UserSeeder seeder, UserRepository users, IPasswordHasher<UserRow> hasher,
+            TokenService tokens, IOptions<AuthOptions> auth, TimeProvider clock, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrEmpty(request.Password))
             {
@@ -27,12 +31,29 @@ public static class AuthEndpoints
             }
 
             await seeder.EnsureAsync(ct);
+            var wrong = Results.Json(new { error = "Wrong username or password." }, statusCode: StatusCodes.Status401Unauthorized);
             var user = await users.GetByUsernameAsync(request.Username.Trim(), ct);
-            if (user is null
-                || hasher.VerifyHashedPassword(user, user.PasswordHash, request.Password) == PasswordVerificationResult.Failed)
+            if (user is null)
             {
-                return Results.Json(new { error = "Wrong username or password." }, statusCode: StatusCodes.Status401Unauthorized);
+                return wrong;
             }
+
+            // A locked account is refused before the password is checked, so guessing stops working.
+            var now = clock.GetUtcNow().UtcDateTime;
+            if (user.LockedUntil is { } lockedUntil && DateTime.SpecifyKind(lockedUntil, DateTimeKind.Utc) > now)
+            {
+                return Locked(http, DateTime.SpecifyKind(lockedUntil, DateTimeKind.Utc) - now);
+            }
+
+            if (hasher.VerifyHashedPassword(user, user.PasswordHash, request.Password) == PasswordVerificationResult.Failed)
+            {
+                var options = auth.Value;
+                await users.RecordFailedLoginAsync(
+                    user.Id, now, options.LockoutThreshold, options.LockoutBaseSeconds, options.LockoutMaxSeconds, ct);
+                return wrong;
+            }
+
+            await users.ClearFailedLoginsAsync(user.Id, ct);
 
             if (user.IsDisabled)
             {
@@ -41,7 +62,7 @@ public static class AuthEndpoints
 
             var token = tokens.Issue(user);
             return Results.Ok(new LoginResponse(token.Token, token.ExpiresAt, await ToDtoAsync(user, users, ct)));
-        }).AllowAnonymous();
+        }).AllowAnonymous().RequireRateLimiting(LoginPolicy);
 
         // A new token for a still-valid one. The web app calls this while the user is active, so the short
         // token lifetime acts as an idle timeout. Disabled or signed-out users fail token validation first.
@@ -60,6 +81,16 @@ public static class AuthEndpoints
             await users.GetByIdAsync(principal.UserId(), ct) is { } user
                 ? Results.Ok(await ToDtoAsync(user, users, ct))
                 : Results.Unauthorized());
+    }
+
+    private static IResult Locked(HttpContext http, TimeSpan remaining)
+    {
+        var seconds = Math.Max(1, (int)Math.Ceiling(remaining.TotalSeconds));
+        http.Response.Headers.RetryAfter = seconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var wait = seconds <= 60 ? "a minute" : $"{(int)Math.Ceiling(seconds / 60.0)} minutes";
+        return Results.Json(
+            new { error = $"Too many failed sign-ins for this account. Try again in {wait}." },
+            statusCode: StatusCodes.Status429TooManyRequests);
     }
 
     internal static async Task<UserDto> ToDtoAsync(UserRow user, UserRepository users, CancellationToken ct) =>

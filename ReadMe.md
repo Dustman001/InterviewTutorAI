@@ -82,6 +82,37 @@ the new value. That's the way back in if the admin password is lost.
    every request. That's how disabling a user, resetting a password or changing a role takes effect
    immediately instead of when the token expires.
 
+### Sign-in protection
+
+- **Account lockout.** After 5 wrong passwords in a row (`Auth:LockoutThreshold`) the account is
+  locked for 1 minute, even against the right password. Each further wrong password doubles the lock,
+  up to 15 minutes (`Auth:LockoutBaseSeconds`, `Auth:LockoutMaxSeconds`). A locked sign-in gets 429
+  with a `Retry-After` header. A successful sign-in or an admin **Reset password** clears the count.
+  Unknown usernames aren't counted and get the same "Wrong username or password" message.
+- **Overall limit.** At most 30 sign-in attempts per minute across all users
+  (`Auth:LoginAttemptsPerMinute`), so many usernames can't be tried at once. The API sees every
+  attempt from the web server's address, so this limit is global rather than per visitor.
+
+## Session limits
+
+These bound what a single session can cost. Settings are in the `Sessions` section of
+`appsettings.json`.
+
+| Limit | Default | When it's reached |
+| --- | --- | --- |
+| Planned length | 5–60 minutes | Creating a session with another value gets 400. |
+| Time | planned length + 5 minutes (`GraceMinutes`) | The tutor wraps up at the planned time. After the grace period, turns get 409 `time_up` and the live page ends and scores the session. |
+| Learner turns | 150 (`MaxUserTurns`) | 409 `turn_limit`; the live page ends and scores the session. |
+| Turn length | 4000 characters, 100 recognized phrases | 400 `turn_too_long`. The live page sends a long spoken turn early, before it gets there. |
+| Request size | 4 MB (`MaxRequestBytes`) | 413. Applies to every API request. |
+| Turn rate | 20 per user per minute (`TurnsPerMinute`) | 429. |
+| Scenario text | 200 characters per field, 8000 for the job description | 400. |
+
+The tutor's replies use prompt caching. Each turn reads the scenario prompt and the conversation so
+far from Claude's cache (5-minute lifetime, renewed by every turn), so only the newest messages are
+billed at the full input price. Token counts, including cache reads and writes, are logged for each
+tutor turn.
+
 ## How sessions are evaluated
 
 Ending a session (`POST /api/sessions/{id}/end`) grades it on the CEFR scale: A1, A2, A2+, B1, B1+, B2,
@@ -142,6 +173,12 @@ cd web
 npm install
 npm run dev                                            # http://localhost:3000
 ```
+
+Tests: `dotnet test` runs the unit tests. With the SQL container up, `$env:TUTORAI_E2E = "1"` also runs
+the integration tests against throwaway databases. Tests that call Claude or Azure Speech run only when
+those keys are in user-secrets. CI (`.github/workflows/ci.yml`) runs the unit and integration tests
+against a SQL Server service container, without Claude or Speech keys, and lints, type-checks and
+builds the web app.
 
 To run locally against the Azure Key Vault instead of user-secrets: `az login`, give your account the
 **Key Vault Secrets User** role on the vault, and set `dotnet user-secrets set "KeyVault:Uri" "https://<vault>.vault.azure.net/"`.
@@ -381,9 +418,9 @@ often finishes anyway.
 
 ## Hardening (optional)
 
-- **Limit sign-in attempts.** There is no lockout or rate limit on `/api/auth/login` yet.
 - **Lock the API to the web app.** Add an access restriction on the API so only the web app's
-  outbound IPs can call it (`az webapp show -n $webApp -g $rg --query outboundIpAddresses`).
+  outbound IPs can call it (`az webapp show -n $webApp -g $rg --query outboundIpAddresses`). Sign-in
+  limits then can't be bypassed by calling the API directly, and per-visitor limits become possible.
 - **Passwordless SQL.** Set a Microsoft Entra admin on the SQL server, create a database user for the
   API's managed identity, and change the `ConnectionStrings--TutorAI` secret to use
   `Authentication=Active Directory Managed Identity` with no password.

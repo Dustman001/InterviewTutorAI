@@ -7,23 +7,41 @@ using TutorAI.Api.Data;
 
 namespace TutorAI.Api.Conversation;
 
+/// <summary>Token counts for one Claude call, filled in as the stream reports them.</summary>
+public sealed class ClaudeUsage
+{
+    public long InputTokens { get; set; }
+    public long OutputTokens { get; set; }
+    public long CacheReadTokens { get; set; }
+    public long CacheWriteTokens { get; set; }
+}
+
 /// <summary>Produces the tutor's next spoken turn with Claude, streamed as text fragments.</summary>
-public sealed class TutorChat(AnthropicClient client, IOptions<AnthropicOptions> options)
+public sealed class TutorChat(AnthropicClient client, IOptions<AnthropicOptions> options, ILogger<TutorChat> logger)
 {
     private const string RefusalFallback = "Sorry, I can't continue with that. Let's talk about something else. What would you like to discuss?";
 
     public async IAsyncEnumerable<string> StreamReplyAsync(
-        SessionRow session, IReadOnlyList<TurnRow> turns, [EnumeratorCancellation] CancellationToken ct)
+        SessionRow session, IReadOnlyList<TurnRow> turns, ClaudeUsage? usage = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
+        usage ??= new ClaudeUsage();
         var scenario = JsonSerializer.Deserialize<Scenario>(session.ScenarioJson, JsonSerializerOptions.Web) ?? new Scenario();
         var parameters = new MessageCreateParams
         {
             Model = options.Value.ConversationModel,
             // Thinking tokens count against this budget, so leave room beyond the short spoken reply.
             MaxTokens = 4096,
-            System = ScenarioPrompts.Build(session, scenario),
+            // The scenario prompt is fixed for the whole session: a cache read point every turn can reuse.
+            System = new List<TextBlockParam>
+            {
+                new() { Text = ScenarioPrompts.Build(session, scenario), CacheControl = new CacheControlEphemeral() },
+            },
+            // Automatic caching moves a second breakpoint to the end of the growing conversation, so each
+            // turn reads everything before it from the cache. Turns are seconds apart: the 5-minute TTL fits.
+            CacheControl = new CacheControlEphemeral(),
             OutputConfig = new OutputConfig { Effort = Effort.Low },
-            Messages = BuildMessages(session, scenario, turns, DateTime.UtcNow),
+            Messages = BuildMessages(session, scenario, turns),
         };
 
         var wroteText = false;
@@ -38,11 +56,25 @@ public sealed class TutorChat(AnthropicClient client, IOptions<AnthropicOptions>
                     yield return text.Text;
                 }
             }
-            else if (streamEvent.TryPickDelta(out var messageDelta) && messageDelta.Delta.StopReason?.ToString() == "refusal")
+            else if (streamEvent.TryPickStart(out var start))
             {
-                refused = true;
+                usage.InputTokens = start.Message.Usage.InputTokens;
+                usage.CacheReadTokens = start.Message.Usage.CacheReadInputTokens ?? 0;
+                usage.CacheWriteTokens = start.Message.Usage.CacheCreationInputTokens ?? 0;
+            }
+            else if (streamEvent.TryPickDelta(out var messageDelta))
+            {
+                usage.OutputTokens = messageDelta.Usage.OutputTokens;
+                if (messageDelta.Delta.StopReason?.ToString() == "refusal")
+                {
+                    refused = true;
+                }
             }
         }
+
+        logger.LogInformation(
+            "Tutor turn for session {SessionId}: {InputTokens} input, {CacheReadTokens} cache read, {CacheWriteTokens} cache write, {OutputTokens} output tokens",
+            session.Id, usage.InputTokens, usage.CacheReadTokens, usage.CacheWriteTokens, usage.OutputTokens);
 
         if (refused && !wroteText)
         {
@@ -50,26 +82,28 @@ public sealed class TutorChat(AnthropicClient client, IOptions<AnthropicOptions>
         }
     }
 
-    internal static List<MessageParam> BuildMessages(
-        SessionRow session, Scenario scenario, IReadOnlyList<TurnRow> turns, DateTime utcNow)
+    /// <remarks>
+    /// The time-up note is decided per turn from the turn's own stored start time, never from the current
+    /// time. A turn therefore renders identically on every later request, which keeps the cached prefix valid.
+    /// </remarks>
+    internal static List<MessageParam> BuildMessages(SessionRow session, Scenario scenario, IReadOnlyList<TurnRow> turns)
     {
+        var plannedEnd = DateTime.SpecifyKind(session.StartedAt, DateTimeKind.Utc)
+            .AddMinutes(ScenarioPrompts.PlannedMinutes(scenario));
+
         List<MessageParam> messages = [new() { Role = Role.User, Content = ScenarioPrompts.Kickoff }];
         foreach (var turn in turns)
         {
+            var isUser = turn.Role == TurnRoles.User;
+            var lateUserTurn = isUser && DateTime.SpecifyKind(turn.StartedAt, DateTimeKind.Utc) >= plannedEnd;
             messages.Add(new()
             {
-                Role = turn.Role == TurnRoles.User ? Role.User : Role.Assistant,
-                Content = turn.Text,
+                Role = isUser ? Role.User : Role.Assistant,
+                Content = lateUserTurn ? turn.Text + ScenarioPrompts.TimeUpNote : turn.Text,
             });
-        }
-
-        var planned = scenario.DurationMinutes > 0 ? scenario.DurationMinutes : 10;
-        var timeIsUp = utcNow - DateTime.SpecifyKind(session.StartedAt, DateTimeKind.Utc) >= TimeSpan.FromMinutes(planned);
-        if (timeIsUp && turns.Count > 0 && turns[^1].Role == TurnRoles.User)
-        {
-            messages[^1] = new() { Role = Role.User, Content = turns[^1].Text + ScenarioPrompts.TimeUpNote };
         }
 
         return messages;
     }
+
 }

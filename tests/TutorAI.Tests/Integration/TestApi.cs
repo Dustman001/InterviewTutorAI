@@ -18,14 +18,25 @@ internal static class TestApi
     public const string GuestPassword = "e2e-Guest-Pass-1";
 
     public static WebApplicationFactory<Program> Create(string connectionString, string? adminPassword = null) =>
-        new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder
-            .UseSetting("ConnectionStrings:TutorAI", connectionString)
-            // Test accounts must not be overridden by secrets in the developer's vault.
-            .UseSetting("KeyVault:Uri", "")
-            .UseSetting("Auth:JwtSigningKey", "e2e-signing-key-0123456789abcdefghijklmnop")
-            .UseSetting("Auth:AdminUsername", AdminUsername)
-            .UseSetting("Auth:AdminPassword", adminPassword ?? AdminPassword)
-            );
+        Create(connectionString, adminPassword, []);
+
+    /// <param name="settings">Extra configuration, e.g. ("Sessions:MaxUserTurns", "2").</param>
+    public static WebApplicationFactory<Program> Create(
+        string connectionString, string? adminPassword, params (string Key, string Value)[] settings) =>
+        new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder
+                .UseSetting("ConnectionStrings:TutorAI", connectionString)
+                // Test accounts must not be overridden by secrets in the developer's vault.
+                .UseSetting("KeyVault:Uri", "")
+                .UseSetting("Auth:JwtSigningKey", "e2e-signing-key-0123456789abcdefghijklmnop")
+                .UseSetting("Auth:AdminUsername", AdminUsername)
+                .UseSetting("Auth:AdminPassword", adminPassword ?? AdminPassword);
+            foreach (var (key, value) in settings)
+            {
+                builder.UseSetting(key, value);
+            }
+        });
 
     /// <summary>Signs in and returns the raw token, or null with the status code when sign-in fails.</summary>
     public static async Task<(string? Token, System.Net.HttpStatusCode Status)> TryLoginAsync(

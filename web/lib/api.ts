@@ -140,6 +140,21 @@ export interface TurnPayload {
   phrases?: unknown[];
 }
 
+/** Mirrors the API's Sessions limits (appsettings.json); the live page sends a turn before reaching them. */
+export const TURN_LIMITS = { maxChars: 4000, maxPhrases: 100 };
+
+/** An API error with the status and, when the API gives one, a machine-readable code such as "time_up". */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | null,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 /** The sign-in expired or is missing: go to the sign-in page and come back here afterwards. */
 function redirectToLogin(): never {
   const here = window.location.pathname + window.location.search;
@@ -162,22 +177,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (response.status === 401) redirectToLogin();
   if (!response.ok) {
-    throw new Error(await errorMessage(response));
+    throw await apiError(response);
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
-async function errorMessage(response: Response): Promise<string> {
+async function apiError(response: Response): Promise<ApiError> {
   try {
     const body = await response.json();
-    if (typeof body?.error === "string") return body.error;
+    if (typeof body?.error === "string") {
+      return new ApiError(body.error, response.status, typeof body.code === "string" ? body.code : null);
+    }
   } catch {
     // Not JSON; fall through to the status line.
   }
-  return response.status >= 500
-    ? `The API is unavailable (${response.status}). Is TutorAI.Api running?`
-    : `Request failed (${response.status}).`;
+  const message =
+    response.status >= 500
+      ? `The API is unavailable (${response.status}). Is TutorAI.Api running?`
+      : `Request failed (${response.status}).`;
+  return new ApiError(message, response.status, null);
 }
 
 export const api = {
@@ -220,7 +239,7 @@ export async function streamTurn(
   });
   if (response.status === 401) redirectToLogin();
   if (!response.ok || !response.body) {
-    throw new Error(await errorMessage(response));
+    throw await apiError(response);
   }
 
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();

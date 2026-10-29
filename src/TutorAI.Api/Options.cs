@@ -28,6 +28,32 @@ public sealed class AuthOptions
     public string AdminUsername { get; set; } = "admin";
     /// <summary>Secret. Key Vault secret Auth--AdminPassword. The admin account is not created while this is empty.</summary>
     public string? AdminPassword { get; set; }
+
+    /// <summary>Failed sign-ins in a row that lock the account.</summary>
+    public int LockoutThreshold { get; set; } = 5;
+    /// <summary>The first lock lasts this long; each further failure doubles it, up to <see cref="LockoutMaxSeconds"/>.</summary>
+    public int LockoutBaseSeconds { get; set; } = 60;
+    public int LockoutMaxSeconds { get; set; } = 900;
+    /// <summary>Sign-in attempts per minute across all users, against password spraying.</summary>
+    public int LoginAttemptsPerMinute { get; set; } = 30;
+}
+
+/// <summary>Bounds on a single session, so one session can't run up unlimited Claude cost.</summary>
+public sealed class SessionLimitsOptions
+{
+    public int MinDurationMinutes { get; set; } = 5;
+    public int MaxDurationMinutes { get; set; } = 60;
+    /// <summary>Turns are refused this long after the planned duration; the tutor closes the session at the planned time.</summary>
+    public int GraceMinutes { get; set; } = 5;
+    public int MaxUserTurns { get; set; } = 150;
+    public int MaxTurnChars { get; set; } = 4000;
+    public int MaxPhrasesPerTurn { get; set; } = 100;
+    /// <summary>Applies to every request. Azure's detailed results with phoneme scores are roughly 10-20 KB per phrase.</summary>
+    public long MaxRequestBytes { get; set; } = 4 * 1024 * 1024;
+    public int MaxScenarioFieldChars { get; set; } = 200;
+    public int MaxJobDescriptionChars { get; set; } = 8000;
+    /// <summary>Turn requests per user per minute. A real learner sends a few.</summary>
+    public int TurnsPerMinute { get; set; } = 20;
 }
 
 public sealed class AssessmentOptions

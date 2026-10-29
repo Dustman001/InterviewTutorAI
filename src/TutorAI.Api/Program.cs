@@ -1,8 +1,11 @@
+using System.Globalization;
+using System.Threading.RateLimiting;
 using Anthropic;
 using Azure.Identity;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using TutorAI.Api;
 using TutorAI.Api.Assessment;
@@ -25,6 +28,12 @@ if (!string.IsNullOrWhiteSpace(keyVaultUri))
 builder.Services.Configure<AzureSpeechOptions>(builder.Configuration.GetSection("AzureSpeech"));
 builder.Services.Configure<AnthropicOptions>(builder.Configuration.GetSection("Anthropic"));
 builder.Services.Configure<AssessmentOptions>(builder.Configuration.GetSection("Assessment"));
+builder.Services.Configure<SessionLimitsOptions>(builder.Configuration.GetSection("Sessions"));
+
+// No request needs more than a long spoken turn with its pronunciation results.
+var maxRequestBytes = (builder.Configuration.GetSection("Sessions").Get<SessionLimitsOptions>() ?? new()).MaxRequestBytes;
+builder.WebHost.ConfigureKestrel(kestrel => kestrel.Limits.MaxRequestBodySize = maxRequestBytes);
+builder.Services.Configure<IISServerOptions>(iis => iis.MaxRequestBodySize = maxRequestBytes);
 builder.Services.AddOptions<AuthOptions>()
     .Bind(builder.Configuration.GetSection("Auth"))
     .Validate(
@@ -45,6 +54,48 @@ builder.Services.AddAuthorizationBuilder()
     .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build())
     .AddPolicy(UserRoles.Admin, policy => policy.RequireRole(UserRoles.Admin));
 
+builder.Services.AddRateLimiter(limiter =>
+{
+    limiter.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    limiter.OnRejected = async (context, ct) =>
+    {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+        {
+            context.HttpContext.Response.Headers.RetryAfter =
+                ((int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+        }
+
+        await context.HttpContext.Response.WriteAsJsonAsync(new { error = "Too many requests. Wait a moment and try again." }, ct);
+    };
+
+    // One shared window for every sign-in attempt: usernames can't be sprayed with guesses. The account
+    // lockout (AuthEndpoints) handles guessing against a single account.
+    limiter.AddPolicy(AuthEndpoints.LoginPolicy, http =>
+    {
+        var perMinute = http.RequestServices.GetRequiredService<IOptions<AuthOptions>>().Value.LoginAttemptsPerMinute;
+        return RateLimitPartition.GetFixedWindowLimiter("all", _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = perMinute,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        });
+    });
+
+    limiter.AddPolicy(SessionEndpoints.TurnsPolicy, http =>
+    {
+        var perMinute = http.RequestServices.GetRequiredService<IOptions<SessionLimitsOptions>>().Value.TurnsPerMinute;
+        return RateLimitPartition.GetTokenBucketLimiter(
+            http.User.FindFirst(TokenService.UserIdClaim)?.Value ?? "anonymous",
+            _ => new TokenBucketRateLimiterOptions
+            {
+                TokenLimit = perMinute,
+                TokensPerPeriod = perMinute,
+                ReplenishmentPeriod = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            });
+    });
+});
+
 builder.Services.AddSingleton(_ =>
 {
     var apiKey = builder.Configuration["Anthropic:ApiKey"];
@@ -64,8 +115,22 @@ builder.Services.AddHttpClient<SpeechTokenService>();
 
 var app = builder.Build();
 
+// Kestrel enforces the limit too, but only once the body is read; this answers 413 up front from the declared length.
+app.Use((http, next) =>
+{
+    if (http.Request.ContentLength > maxRequestBytes)
+    {
+        http.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+        return http.Response.WriteAsJsonAsync(new { error = "The request is too large." });
+    }
+
+    return next(http);
+});
+
 app.UseAuthentication();
 app.UseAuthorization();
+// After authentication, so turn requests are limited per user.
+app.UseRateLimiter();
 
 app.MapGet("/api/health", async (SessionRepository repository, SpeechTokenService speech, CancellationToken ct) =>
 {

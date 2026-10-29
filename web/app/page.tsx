@@ -121,6 +121,7 @@ export default function Home() {
               <span>Or your own topic</span>
               <input
                 value={customTopic}
+                maxLength={200}
                 onChange={(e) => setCustomTopic(e.target.value)}
                 placeholder="e.g. the last film I watched"
               />
@@ -133,6 +134,7 @@ export default function Home() {
                 <span>Role</span>
                 <input
                   value={role}
+                  maxLength={200}
                   onChange={(e) => setRole(e.target.value)}
                   placeholder="e.g. Backend engineer"
                   required
@@ -140,7 +142,7 @@ export default function Home() {
               </label>
               <label className="field">
                 <span>Seniority</span>
-                <input value={seniority} onChange={(e) => setSeniority(e.target.value)} placeholder="e.g. Senior" />
+                <input value={seniority} maxLength={200} onChange={(e) => setSeniority(e.target.value)} placeholder="e.g. Senior" />
               </label>
             </div>
             <label className="field">
@@ -155,6 +157,7 @@ export default function Home() {
               <span>Job description (optional)</span>
               <textarea
                 value={jobDescription}
+                maxLength={8000}
                 onChange={(e) => setJobDescription(e.target.value)}
                 rows={4}
                 placeholder="Paste the posting to get questions tailored to it"
