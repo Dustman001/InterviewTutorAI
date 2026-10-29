@@ -887,3 +887,96 @@ details.card > summary {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+.summary-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+/* Printable session report (Print / Save as PDF on the summary page). */
+@media print {
+  @page {
+    size: auto;
+    margin: 14mm;
+  }
+
+  /* Print in the light palette whatever the screen theme, on plain white. */
+  :root {
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --ink: #1c1b18;
+    --muted: #55524a;
+    --line: #d6d3ca;
+    --accent: #1f5f5b;
+    --accent-soft: #e6f0ee;
+    --user: #f2f3f7;
+    --series-1: #2a78d6;
+    color-scheme: light;
+  }
+
+  /* The screen layout centres the page in a grid sized to its content, which Chrome's print layout lets
+     run past the right margin. Plain block flow keeps everything inside the printable width. */
+  body {
+    display: block;
+    height: auto;
+    background: #ffffff;
+    font-size: 11pt;
+  }
+
+  body::before,
+  body::after {
+    display: none !important;
+  }
+
+  .back,
+  .no-print,
+  .userbar,
+  button {
+    display: none !important;
+  }
+
+  /* A hair of side padding: on Letter the cards fill the printable width exactly, and the last border
+     would land on the clip edge. */
+  .shell {
+    max-width: none;
+    padding: 0 2px;
+    margin: 0;
+  }
+
+  .card,
+  .level,
+  .corrections li,
+  .viz,
+  .line {
+    break-inside: avoid;
+    box-shadow: none;
+  }
+
+  h1,
+  h2,
+  h3 {
+    break-after: avoid;
+  }
+
+  details > summary {
+    list-style: none;
+    font-weight: 600;
+  }
+
+  details > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .transcript {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+}

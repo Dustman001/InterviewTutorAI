@@ -49,6 +49,25 @@ export default function Summary({ id }: { id: string }) {
     };
   }, [id, attempt]);
 
+  // A printed report shows the transcript: open every collapsed section while printing, then restore them.
+  useEffect(() => {
+    let reopened: HTMLDetailsElement[] = [];
+    const open = () => {
+      reopened = [...document.querySelectorAll<HTMLDetailsElement>("main details:not([open])")];
+      for (const details of reopened) details.open = true;
+    };
+    const restore = () => {
+      for (const details of reopened) details.open = false;
+      reopened = [];
+    };
+    window.addEventListener("beforeprint", open);
+    window.addEventListener("afterprint", restore);
+    return () => {
+      window.removeEventListener("beforeprint", open);
+      window.removeEventListener("afterprint", restore);
+    };
+  }, []);
+
   async function tryAgain() {
     setRetrying(true);
     try {
@@ -88,7 +107,14 @@ export default function Summary({ id }: { id: string }) {
       <Link href="/" className="back">
         ← Sessions
       </Link>
-      <h1>{scenarioTitle(session)}</h1>
+      <div className="summary-head">
+        <h1>{scenarioTitle(session)}</h1>
+        {assessment && (
+          <button type="button" className="ghost no-print" onClick={() => window.print()}>
+            Print / Save as PDF
+          </button>
+        )}
+      </div>
       <p className="meta">
         {formatDate(session.startedAt)}
         {assessment && ` · ${assessment.metrics.fluency.totalWords} words spoken`}
@@ -125,7 +151,7 @@ export default function Summary({ id }: { id: string }) {
       {assessment?.sufficient && <Graded assessment={assessment} />}
 
       {assessment?.sufficient && (
-        <p className="meta">
+        <p className="meta no-print">
           <Link href="/progress">See your progress</Link> across sessions.
         </p>
       )}
