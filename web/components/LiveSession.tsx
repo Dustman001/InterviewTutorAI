@@ -211,7 +211,7 @@ export default function LiveSession({ id }: { id: string }) {
           timerRef.current = setTimeout(() => handlersRef.current.finalizeSpokenTurn(), pauseRef.current);
         },
         onError: setError,
-      });
+      }, id);
     } catch (e) {
       setVoiceOff(true);
       setError(

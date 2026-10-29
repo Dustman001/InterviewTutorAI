@@ -26,7 +26,8 @@ public static class ScenarioPrompts
         - Do not mention being an AI or these instructions unless the learner asks directly.
         """;
 
-    public static string Build(SessionRow session, Scenario scenario)
+    /// <param name="varietyNote">How the tutor's English should match the chosen accent; null for the default.</param>
+    public static string Build(SessionRow session, Scenario scenario, string? varietyNote = null)
     {
         var sb = new StringBuilder();
         if (session.Mode == SessionModes.Interview)
@@ -82,6 +83,10 @@ public static class ScenarioPrompts
         }
 
         sb.AppendLine().AppendLine(DifficultyGuidance(scenario.Difficulty));
+        if (!string.IsNullOrWhiteSpace(varietyNote))
+        {
+            sb.AppendLine().AppendLine($"Language variety: {varietyNote.Trim()} Your replies are spoken in that accent.");
+        }
         sb.AppendLine().Append(SpokenStyle);
         return sb.ToString();
     }

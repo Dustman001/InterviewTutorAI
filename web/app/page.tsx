@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { api, signOut, type CurrentUser, type Mode, type SessionSummary } from "@/lib/api";
+import { api, signOut, type AccentChoice, type CurrentUser, type Mode, type SessionSummary } from "@/lib/api";
 import { formatDate, scenarioTitle } from "@/lib/format";
 
 const TOPICS = ["Small talk", "Travel", "Work and career", "Technology", "Opinions and debate"];
@@ -22,24 +22,50 @@ export default function Home() {
   const [jobDescription, setJobDescription] = useState("");
   const [difficulty, setDifficulty] = useState("Normal");
   const [duration, setDuration] = useState(10);
+  const [accents, setAccents] = useState<AccentChoice[]>([]);
+  const [accent, setAccent] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [user, setUser] = useState<CurrentUser | null>(null);
 
   useEffect(() => {
     api
       .listSessions()
-      .then(setSessions)
+      .then((page) => {
+        setSessions(page.items);
+        setNextCursor(page.nextCursor);
+      })
       .catch((e: Error) => setError(e.message));
     api
       .me()
       .then(setUser)
       .catch((e: Error) => setError(e.message));
+    // Optional: without the list, sessions use the default accent.
+    api
+      .accents()
+      .then(setAccents)
+      .catch(() => setAccents([]));
   }, []);
 
   const sessionsLeft = user?.sessionLimit == null ? null : Math.max(0, user.sessionLimit - user.sessionsUsed);
   const outOfSessions = sessionsLeft === 0;
+
+  async function loadMore() {
+    if (!nextCursor) return;
+    setLoadingMore(true);
+    try {
+      const page = await api.listSessions(nextCursor);
+      setSessions((current) => [...(current ?? []), ...page.items]);
+      setNextCursor(page.nextCursor);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load more sessions.");
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   async function start(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -49,8 +75,8 @@ export default function Home() {
       const session = await api.createSession(
         mode,
         mode === "Conversation"
-          ? { topic: customTopic.trim() || topic, difficulty, durationMinutes: duration }
-          : { role, seniority, interviewType, jobDescription, difficulty, durationMinutes: duration },
+          ? { topic: customTopic.trim() || topic, difficulty, durationMinutes: duration, accent }
+          : { role, seniority, interviewType, jobDescription, difficulty, durationMinutes: duration, accent },
       );
       router.push(`/session/${session.id}`);
     } catch (e) {
@@ -72,6 +98,8 @@ export default function Home() {
               : ` · ${sessionsLeft} of ${user.sessionLimit} sessions left`}
           </span>
           <span className="userbar-actions">
+            <Link href="/progress">Progress</Link>
+            <Link href="/account">Account</Link>
             {user.role === "Admin" && <Link href="/users">Manage users</Link>}
             <button type="button" onClick={() => void signOut()}>
               Sign out
@@ -175,6 +203,18 @@ export default function Home() {
               ))}
             </select>
           </label>
+          {accents.length > 1 && (
+            <label className="field">
+              <span>Accent</span>
+              <select value={accent ?? accents[0].id} onChange={(e) => setAccent(e.target.value)}>
+                {accents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="field">
             <span>Length</span>
             <select value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
@@ -214,13 +254,24 @@ export default function Home() {
                     </span>
                   </>
                 ) : (
-                  <span className="meta">{s.status === "Active" ? "In progress" : "Not graded"}</span>
+                  <span className="meta">
+                    {s.status === "Active"
+                      ? "In progress"
+                      : s.gradingState === "Pending" || s.gradingState === "Running"
+                        ? "Scoring…"
+                        : "Not graded"}
+                  </span>
                 )}
               </span>
             </Link>
           </li>
         ))}
       </ul>
+      {nextCursor && (
+        <button type="button" className="ghost load-more" onClick={() => void loadMore()} disabled={loadingMore}>
+          {loadingMore ? "Loading…" : "Load more"}
+        </button>
+      )}
     </main>
   );
 }

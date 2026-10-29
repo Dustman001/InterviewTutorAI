@@ -65,7 +65,7 @@ public sealed class AuthFlowTests(ThrowawayDatabase database) : IClassFixture<Th
             HttpStatusCode.NotFound,
             (await guest.PostAsJsonAsync($"/api/sessions/{adminSession}/turns", new { text = "hi" })).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await guest.PostAsync($"/api/sessions/{adminSession}/end", null)).StatusCode);
-        var guestList = await guest.GetFromJsonAsync<JsonElement>("/api/sessions");
+        var guestList = (await guest.GetFromJsonAsync<JsonElement>("/api/sessions")).GetProperty("items");
         Assert.DoesNotContain(guestList.EnumerateArray(), s => s.GetProperty("id").GetGuid() == adminSession);
         Assert.All(guestSessions, id => Assert.Contains(guestList.EnumerateArray(), s => s.GetProperty("id").GetGuid() == id));
 

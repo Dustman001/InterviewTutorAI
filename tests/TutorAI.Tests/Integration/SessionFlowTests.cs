@@ -88,7 +88,7 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/sessions/{Guid.NewGuid()}")).StatusCode);
 
         var sessionId = await CreateSessionAsync(client);
-        var list = await client.GetFromJsonAsync<JsonElement>("/api/sessions");
+        var list = (await client.GetFromJsonAsync<JsonElement>("/api/sessions")).GetProperty("items");
         Assert.Contains(list.EnumerateArray(), s => s.GetProperty("id").GetGuid() == sessionId);
 
         var health = await client.GetFromJsonAsync<JsonElement>("/api/health");
@@ -263,10 +263,12 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
                 new { sessionId }));
     }
 
-    private static async Task<(string Text, List<JsonElement> Phrases)> SpeakAndAssessAsync(string text)
+    /// <summary>Speaks the text with an Azure voice, then recognizes and assesses it as the browser would.</summary>
+    internal static async Task<(string Text, List<JsonElement> Phrases)> SpeakAndAssessAsync(
+        string text, string voice = "en-US-GuyNeural", string locale = "en-US", bool prosody = true)
     {
         var config = SpeechConfig.FromSubscription(E2E.Config["AzureSpeech:Key"], E2E.Config["AzureSpeech:Region"]);
-        config.SpeechSynthesisVoiceName = "en-US-GuyNeural";
+        config.SpeechSynthesisVoiceName = voice;
         config.OutputFormat = OutputFormat.Detailed;
         config.RequestWordLevelTimestamps();
 
@@ -281,9 +283,12 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
             }
 
             using var audio = AudioConfig.FromWavFileInput(wav);
-            using var recognizer = new SpeechRecognizer(config, "en-US", audio);
+            using var recognizer = new SpeechRecognizer(config, locale, audio);
             var assessment = new PronunciationAssessmentConfig("", GradingSystem.HundredMark, Granularity.Phoneme, false);
-            assessment.EnableProsodyAssessment();
+            if (prosody)
+            {
+                assessment.EnableProsodyAssessment();
+            }
             assessment.ApplyTo(recognizer);
 
             var texts = new List<string>();

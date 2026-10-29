@@ -40,7 +40,9 @@ public sealed record Scenario(
     string? InterviewType = null,
     string? JobDescription = null,
     string? Difficulty = null,
-    int DurationMinutes = 10);
+    int DurationMinutes = 10,
+    /// <summary>A locale from AzureSpeech:Accents, e.g. en-GB. Null: the default accent.</summary>
+    string? Accent = null);
 
 public sealed record CreateSessionRequest(string Mode, Scenario? Scenario);
 
@@ -113,6 +115,7 @@ public sealed class SessionListRow
     public DateTime StartedAt { get; set; }
     public DateTime? EndedAt { get; set; }
     public string Status { get; set; } = "";
+    public string? GradingState { get; set; }
     public string? Fluency { get; set; }
     public string? Grammar { get; set; }
     public string? Vocabulary { get; set; }

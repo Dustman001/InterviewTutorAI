@@ -215,6 +215,9 @@ function UserRow({ user, isMe, run }: { user: AdminUser; isMe: boolean; run: Run
             {user.isDisabled ? "Enable" : "Disable"}
           </button>
         )}
+        <Link className="button-link" href={`/progress?user=${user.id}`}>
+          Progress
+        </Link>
         <button type="button" aria-expanded={panel === "password"} onClick={() => toggle("password")}>
           Reset password
         </button>

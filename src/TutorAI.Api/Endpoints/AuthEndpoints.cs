@@ -12,6 +12,8 @@ public sealed record UserDto(string Username, string Role, int? SessionLimit, in
 
 public sealed record LoginResponse(string Token, DateTime ExpiresAt, UserDto User);
 
+public sealed record ChangePasswordRequest(string? CurrentPassword, string? NewPassword);
+
 public static class AuthEndpoints
 {
     /// <summary>Rate-limit policy for sign-in attempts across all users (see Program.cs).</summary>
@@ -82,6 +84,54 @@ public static class AuthEndpoints
             var token = tokens.Issue(user);
             return Results.Ok(new LoginResponse(token.Token, token.ExpiresAt, await ToDtoAsync(user, users, ct)));
         });
+
+        // Change your own password. The current one is checked like a sign-in (a wrong one counts toward the
+        // lockout). Every other session is signed out; this one gets a fresh token so it stays signed in.
+        auth.MapPost("/password", async (
+            ChangePasswordRequest request, ClaimsPrincipal principal, HttpContext http, UserRepository users,
+            IPasswordHasher<UserRow> hasher, TokenService tokens, IOptions<AuthOptions> auth, TimeProvider clock,
+            CancellationToken ct) =>
+        {
+            if (await users.GetByIdAsync(principal.UserId(), ct) is not { } user)
+            {
+                return Results.Unauthorized();
+            }
+
+            var now = clock.GetUtcNow().UtcDateTime;
+            if (user.LockedUntil is { } lockedUntil && DateTime.SpecifyKind(lockedUntil, DateTimeKind.Utc) > now)
+            {
+                FailedLogin("locked");
+                return Locked(http, DateTime.SpecifyKind(lockedUntil, DateTimeKind.Utc) - now);
+            }
+
+            if (string.IsNullOrEmpty(request.CurrentPassword)
+                || hasher.VerifyHashedPassword(user, user.PasswordHash, request.CurrentPassword) == PasswordVerificationResult.Failed)
+            {
+                var options = auth.Value;
+                await users.RecordFailedLoginAsync(
+                    user.Id, now, options.LockoutThreshold, options.LockoutBaseSeconds, options.LockoutMaxSeconds, ct);
+                FailedLogin("password");
+                return Results.BadRequest(new { error = "Your current password is wrong." });
+            }
+
+            if (UserEndpoints.PasswordProblem(request.NewPassword) is { } problem)
+            {
+                return Results.BadRequest(new { error = problem });
+            }
+
+            if (request.NewPassword == request.CurrentPassword)
+            {
+                return Results.BadRequest(new { error = "Choose a password different from the current one." });
+            }
+
+            // configPasswordHash null keeps the built-in admin's record of the configured password, so the
+            // change survives restarts until the configured password itself changes (as with an admin reset).
+            await users.SetPasswordAsync(user.Id, hasher.HashPassword(user, request.NewPassword!), configPasswordHash: null, signOut: true, ct);
+
+            var updated = await users.GetByIdAsync(user.Id, ct) ?? user;
+            var token = tokens.Issue(updated);
+            return Results.Ok(new LoginResponse(token.Token, token.ExpiresAt, await ToDtoAsync(updated, users, ct)));
+        }).RequireRateLimiting(LoginPolicy);
 
         auth.MapGet("/me", async (ClaimsPrincipal principal, UserRepository users, CancellationToken ct) =>
             await users.GetByIdAsync(principal.UserId(), ct) is { } user

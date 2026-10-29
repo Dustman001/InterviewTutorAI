@@ -27,6 +27,7 @@ goes in `appsettings.json` or App Service app settings.
 | `AzureSpeech:Region` | no | – | App setting `AzureSpeech__Region` |
 | `Anthropic:ConversationModel` / `GradingModel` | no | – | `appsettings.json` (override with app settings if needed) |
 | `Auth:AdminUsername` / `TokenLifetimeMinutes` | no | – | `appsettings.json` (`admin`, `15`) |
+| `AzureSpeech:Accents` | no | – | `appsettings.json` (see [Accents](#accents)) |
 
 How it works: when `KeyVault:Uri` is set, `Program.cs` adds Key Vault as a configuration source and
 signs in with `DefaultAzureCredential` (the App Service managed identity in Azure, your `az login`
@@ -60,6 +61,11 @@ Admins get a **Manage users** link (`/users`) where they can:
 
 Admins can't disable, demote or delete their own account, and the last enabled admin can't be removed.
 Changing a role also signs the user out.
+
+Every user can change their own password on the **Account** page (`/account`, linked from the user
+bar; `POST /api/auth/password`). It needs the current password, and a wrong one counts toward the
+sign-in lockout. The change signs the user out on every other browser and device but keeps the current
+one signed in.
 
 Passwords are stored hashed (ASP.NET Core Identity's PBKDF2 hasher) in `dbo.Users`, at least 8
 characters. After the first startup the Users page owns the built-in admin too: a password set on the
@@ -152,7 +158,24 @@ transcript. Code: `src/TutorAI.Api/Assessment`.
 
 The result, with the measurements and Claude's detailed output, is stored in `dbo.Assessments` and
 shown on the session summary page. Ending the same session again returns the stored result. Pass
-`?regrade=true` to grade it again.
+`?regrade=true` to grade it again. **Print / Save as PDF** on the summary page prints a clean report
+with the transcript expanded.
+
+**Progress** (`/progress`, from the user bar) charts each graded session's levels, speaking rate and
+pronunciation score over time, and compares the last 5 sessions with the 5 before. Admins can open
+any user's progress from the Users page (`GET /api/progress?userId=`).
+
+### Accents
+
+Learners pick the English they practise when they start a session: American (the default), British,
+Australian or Indian English. The accent sets the speech recognition locale, the tutor's voice and a
+note in the tutor's prompt (for example British vocabulary and spelling). The allowlist is
+`AzureSpeech:Accents` in `appsettings.json`, keyed by locale, each with a `Label`, a `Voice` (an Azure
+neural voice name) and an optional `PromptNote`.
+
+Azure scores **prosody** (rhythm and intonation) for `en-US` only. Other accents are assessed on
+accuracy and fluency, so their pronunciation level comes from accuracy alone. That runs higher than the
+blended score and is less reliable, and the summary page says so.
 
 ### Grading runs in the background
 

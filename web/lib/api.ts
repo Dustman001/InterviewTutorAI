@@ -10,6 +10,15 @@ export interface Scenario {
   jobDescription?: string | null;
   difficulty?: string | null;
   durationMinutes: number;
+  /** A locale from GET /api/speech/accents, e.g. "en-GB". Missing: the default accent. */
+  accent?: string | null;
+}
+
+export interface AccentChoice {
+  id: string;
+  label: string;
+  /** Whether Azure scores prosody for it (en-US only). */
+  prosody: boolean;
 }
 
 export interface Session {
@@ -32,6 +41,13 @@ export interface Levels {
 
 export interface SessionSummary extends Session {
   levels: Levels | null;
+  gradingState: GradingState | null;
+}
+
+export interface SessionPage {
+  items: SessionSummary[];
+  /** Pass as `before` for the next page; null on the last page. */
+  nextCursor: string | null;
 }
 
 export interface Turn {
@@ -107,11 +123,36 @@ export interface SessionDetail {
   grading: { state: GradingState | null; error: string | null };
 }
 
+/** One graded session on the progress page. */
+export interface ProgressPoint {
+  sessionId: string;
+  startedAt: string;
+  mode: Mode;
+  fluency: string | null;
+  grammar: string | null;
+  vocabulary: string | null;
+  interaction: string | null;
+  pronunciation: string | null;
+  overall: string;
+  wordsPerMinute: number | null;
+  pauseRatio: number | null;
+  pronunciationScore: number | null;
+}
+
+export interface Progress {
+  userId: number;
+  username: string;
+  /** Oldest first. */
+  points: ProgressPoint[];
+}
+
 export interface SpeechToken {
   token: string;
   region: string;
   locale: string;
   voice: string;
+  /** Request prosody assessment: Azure supports it for en-US only. */
+  prosody: boolean;
 }
 
 export interface CurrentUser {
@@ -217,12 +258,24 @@ async function apiError(response: Response): Promise<ApiError> {
 export const api = {
   createSession: (mode: Mode, scenario: Scenario) =>
     request<Session>("/api/sessions", { method: "POST", body: JSON.stringify({ mode, scenario }) }),
-  listSessions: () => request<SessionSummary[]>("/api/sessions"),
+  listSessions: (before?: string | null) =>
+    request<SessionPage>(before ? `/api/sessions?before=${encodeURIComponent(before)}` : "/api/sessions"),
   getSession: (id: string) => request<SessionDetail>(`/api/sessions/${id}`),
   /** The assessment when it's ready (200), otherwise the grading state (202): poll getSession until it's done. */
   endSession: (id: string) =>
     request<Assessment | { state: GradingState }>(`/api/sessions/${id}/end`, { method: "POST" }),
-  speechToken: () => request<SpeechToken>("/api/speech/token"),
+  /** With a session id, the locale and voice are that session's accent. */
+  speechToken: (sessionId?: string) =>
+    request<SpeechToken>(sessionId ? `/api/speech/token?sessionId=${encodeURIComponent(sessionId)}` : "/api/speech/token"),
+  accents: () => request<AccentChoice[]>("/api/speech/accents"),
+  /** userId: admins only; others get their own progress. */
+  progress: (mode?: Mode, userId?: number) => {
+    const query = new URLSearchParams();
+    if (mode) query.set("mode", mode);
+    if (userId) query.set("userId", String(userId));
+    const qs = query.toString();
+    return request<Progress>(qs ? `/api/progress?${qs}` : "/api/progress");
+  },
   me: () => request<CurrentUser>("/api/auth/me"),
 };
 
