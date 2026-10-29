@@ -19,8 +19,17 @@ public sealed record GradingResult(
     string Summary,
     List<Correction> TopCorrections);
 
+/// <summary>Grades a session's transcript. The real one calls Claude; tests swap in a fake.</summary>
+public interface ICefrGrader
+{
+    /// <summary>The model id stored with the assessment.</summary>
+    string Model { get; }
+
+    Task<GradingResult> GradeAsync(SessionRow session, IReadOnlyList<TurnRow> turns, FluencyStats fluency, CancellationToken ct);
+}
+
 /// <summary>Grades the learner's side of a transcript against the CEFR spoken-language descriptors using Claude.</summary>
-public sealed class CefrGrader(AnthropicClient client, IOptions<AnthropicOptions> options)
+public sealed class CefrGrader(AnthropicClient client, IOptions<AnthropicOptions> options) : ICefrGrader
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 

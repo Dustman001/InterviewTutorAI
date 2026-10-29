@@ -20,13 +20,20 @@ public sealed record AssessmentResponse(
     string? Model,
     DateTime CreatedAt);
 
+/// <summary>The result of ending a session: the stored assessment when there is one, and the grading state.</summary>
+public sealed record EndResult(AssessmentResponse? Assessment, string? GradingState);
+
 public sealed class AssessmentService(
-    SessionRepository repository, CefrGrader grader, IOptions<AssessmentOptions> options)
+    SessionRepository repository, ICefrGrader grader, GradingSignal signal, IOptions<AssessmentOptions> options)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    /// <summary>Ends the session and returns its assessment, grading it on first call.</summary>
-    public async Task<AssessmentResponse?> EndAndAssessAsync(Guid sessionId, bool regrade, CancellationToken ct)
+    /// <summary>
+    /// Ends the session. A stored assessment is returned as is (unless <paramref name="regrade"/>). A session too
+    /// short to grade is assessed right away, since that needs no Claude call. Anything else is queued for the
+    /// background worker, and the result carries the grading state instead of an assessment.
+    /// </summary>
+    public async Task<EndResult?> EndAsync(Guid sessionId, bool regrade, CancellationToken ct)
     {
         var session = await repository.GetSessionAsync(sessionId, ct);
         if (session is null)
@@ -36,38 +43,79 @@ public sealed class AssessmentService(
 
         await repository.EndSessionAsync(sessionId, ct);
 
+        if (GradingStates.InProgress(session.GradingState))
+        {
+            return new EndResult(null, session.GradingState);
+        }
+
         if (!regrade && await repository.GetAssessmentAsync(sessionId, ct) is { } existing)
         {
-            return ToResponse(existing);
+            return new EndResult(ToResponse(existing), GradingStates.Done);
         }
 
         var turns = await repository.GetTurnsAsync(sessionId, includePronunciationJson: true, ct);
         var metrics = ComputeMetrics(turns);
-        var row = new AssessmentRow { SessionId = sessionId, MetricsJson = JsonSerializer.Serialize(metrics, Json) };
-
-        var minWords = options.Value.MinUserWords;
-        if (metrics.Fluency.TotalWords < minWords)
+        if (Insufficient(sessionId, metrics) is { } shortRow)
         {
-            row.DetailJson = JsonSerializer.Serialize(
-                new InsufficientDetail($"You spoke {metrics.Fluency.TotalWords} words; at least {minWords} are needed for a reliable estimate."),
-                Json);
+            var saved = await repository.SaveAssessmentAsync(shortRow, ct);
+            await repository.SetGradingDoneAsync(sessionId, ct);
+            return new EndResult(ToResponse(saved), GradingStates.Done);
         }
-        else
+
+        var state = await repository.QueueGradingAsync(sessionId, ct);
+        signal.Notify();
+        return new EndResult(null, state);
+    }
+
+    /// <summary>Grades the session from its stored turns and saves the assessment. Called by the grading worker.</summary>
+    public async Task GradeAsync(Guid sessionId, CancellationToken ct)
+    {
+        var session = await repository.GetSessionAsync(sessionId, ct)
+            ?? throw new InvalidOperationException($"Session {sessionId} no longer exists.");
+        var turns = await repository.GetTurnsAsync(sessionId, includePronunciationJson: true, ct);
+        var metrics = ComputeMetrics(turns);
+
+        var row = Insufficient(sessionId, metrics);
+        if (row is null)
         {
             var grading = await grader.GradeAsync(session, turns, metrics.Fluency, ct);
-            row.Fluency = grading.Fluency.Level;
-            row.Grammar = grading.Grammar.Level;
-            row.Vocabulary = grading.Vocabulary.Level;
-            row.Interaction = grading.Interaction.Level;
-            row.Pronunciation = metrics.Pronunciation.Composite is { } composite
-                ? CefrMapper.FromPronunciationScore(composite)
-                : null;
+            row = new AssessmentRow
+            {
+                SessionId = sessionId,
+                MetricsJson = JsonSerializer.Serialize(metrics, Json),
+                Fluency = grading.Fluency.Level,
+                Grammar = grading.Grammar.Level,
+                Vocabulary = grading.Vocabulary.Level,
+                Interaction = grading.Interaction.Level,
+                Pronunciation = metrics.Pronunciation.Composite is { } composite
+                    ? CefrMapper.FromPronunciationScore(composite)
+                    : null,
+                DetailJson = JsonSerializer.Serialize(grading, Json),
+                Model = grader.Model,
+            };
             row.Overall = CefrMapper.Median([row.Fluency, row.Grammar, row.Vocabulary, row.Interaction, row.Pronunciation]);
-            row.DetailJson = JsonSerializer.Serialize(grading, Json);
-            row.Model = grader.Model;
         }
 
-        return ToResponse(await repository.SaveAssessmentAsync(row, ct));
+        await repository.SaveAssessmentAsync(row, ct);
+    }
+
+    /// <summary>The "too short to grade" assessment, or null when the learner spoke enough.</summary>
+    private AssessmentRow? Insufficient(Guid sessionId, SessionMetrics metrics)
+    {
+        var minWords = options.Value.MinUserWords;
+        if (metrics.Fluency.TotalWords >= minWords)
+        {
+            return null;
+        }
+
+        return new AssessmentRow
+        {
+            SessionId = sessionId,
+            MetricsJson = JsonSerializer.Serialize(metrics, Json),
+            DetailJson = JsonSerializer.Serialize(
+                new InsufficientDetail($"You spoke {metrics.Fluency.TotalWords} words; at least {minWords} are needed for a reliable estimate."),
+                Json),
+        };
     }
 
     public async Task<AssessmentResponse?> GetAsync(Guid sessionId, CancellationToken ct) =>

@@ -129,4 +129,119 @@ public sealed class SessionRepository(IConfiguration configuration)
             """,
             row, cancellationToken: ct));
     }
+
+    /// <summary>
+    /// Queues the session for grading unless grading is already queued or running. Returns the state afterwards.
+    /// </summary>
+    public async Task<string?> QueueGradingAsync(Guid id, CancellationToken ct)
+    {
+        await using var db = Open();
+        return await db.ExecuteScalarAsync<string?>(new CommandDefinition(
+            """
+            UPDATE dbo.Sessions
+            SET GradingState = @pending, GradingAttempts = 0, GradingError = NULL,
+                GradingStartedAt = NULL, GradingNextAttemptAt = NULL
+            WHERE Id = @id AND (GradingState IS NULL OR GradingState NOT IN (@pending, @running));
+
+            SELECT GradingState FROM dbo.Sessions WHERE Id = @id;
+            """,
+            new { id, pending = GradingStates.Pending, running = GradingStates.Running }, cancellationToken: ct));
+    }
+
+    public async Task SetGradingDoneAsync(Guid id, CancellationToken ct)
+    {
+        await using var db = Open();
+        await db.ExecuteAsync(new CommandDefinition(
+            "UPDATE dbo.Sessions SET GradingState = @done, GradingError = NULL, GradingNextAttemptAt = NULL WHERE Id = @id",
+            new { id, done = GradingStates.Done }, cancellationToken: ct));
+    }
+
+    /// <summary>
+    /// Claims one due grading job: a Pending row whose retry time has come, or a Running row whose worker
+    /// stopped answering (claimed more than <paramref name="staleMinutes"/> ago) with attempts left.
+    /// READPAST skips rows another instance is claiming, so each job goes to exactly one worker.
+    /// </summary>
+    public async Task<GradingClaim?> ClaimGradingAsync(int staleMinutes, int maxAttempts, CancellationToken ct)
+    {
+        await using var db = Open();
+        return await db.QuerySingleOrDefaultAsync<GradingClaim>(new CommandDefinition(
+            """
+            UPDATE TOP (1) dbo.Sessions WITH (ROWLOCK, UPDLOCK, READPAST)
+            SET GradingState = @running, GradingStartedAt = SYSUTCDATETIME(),
+                GradingAttempts = GradingAttempts + 1, GradingNextAttemptAt = NULL
+            OUTPUT inserted.Id AS SessionId, inserted.GradingAttempts AS Attempt
+            WHERE (GradingState = @pending AND (GradingNextAttemptAt IS NULL OR GradingNextAttemptAt <= SYSUTCDATETIME()))
+               OR (GradingState = @running AND GradingStartedAt < DATEADD(minute, -@staleMinutes, SYSUTCDATETIME())
+                   AND GradingAttempts < @maxAttempts)
+            """,
+            new { pending = GradingStates.Pending, running = GradingStates.Running, staleMinutes, maxAttempts },
+            cancellationToken: ct));
+    }
+
+    /// <summary>Running jobs that went stale on their last attempt are failed instead of claimed again.</summary>
+    public async Task<int> FailStaleGradingAsync(int staleMinutes, int maxAttempts, string error, CancellationToken ct)
+    {
+        await using var db = Open();
+        return await db.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE dbo.Sessions
+            SET GradingState = @failed, GradingError = @error
+            WHERE GradingState = @running AND GradingStartedAt < DATEADD(minute, -@staleMinutes, SYSUTCDATETIME())
+              AND GradingAttempts >= @maxAttempts
+            """,
+            new { failed = GradingStates.Failed, running = GradingStates.Running, staleMinutes, maxAttempts, error },
+            cancellationToken: ct));
+    }
+
+    /// <summary>
+    /// Milliseconds until the next grading job falls due (a retry time or a stale Running row), 0 if one is due
+    /// now, or null when nothing is queued. Measured on the database clock, like the claim.
+    /// </summary>
+    public async Task<long?> MillisecondsUntilNextGradingAsync(int staleMinutes, CancellationToken ct)
+    {
+        await using var db = Open();
+        return await db.ExecuteScalarAsync<long?>(new CommandDefinition(
+            """
+            SELECT MIN(CASE WHEN due < SYSUTCDATETIME() THEN 0 ELSE DATEDIFF_BIG(millisecond, SYSUTCDATETIME(), due) END)
+            FROM (
+                SELECT CASE WHEN GradingState = @pending THEN ISNULL(GradingNextAttemptAt, SYSUTCDATETIME())
+                            ELSE DATEADD(minute, @staleMinutes, GradingStartedAt) END AS due
+                FROM dbo.Sessions
+                WHERE GradingState IN (@pending, @running)
+            ) jobs
+            """,
+            new { pending = GradingStates.Pending, running = GradingStates.Running, staleMinutes }, cancellationToken: ct));
+    }
+
+    /// <summary>Records a finished attempt, unless another worker has since claimed the job.</summary>
+    public async Task FinishGradingAttemptAsync(GradingClaim claim, string state, string? error, int? retryAfterSeconds, CancellationToken ct)
+    {
+        await using var db = Open();
+        await db.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE dbo.Sessions
+            SET GradingState = @state, GradingError = @error,
+                GradingNextAttemptAt = CASE WHEN @retryAfterSeconds IS NULL THEN NULL
+                                            ELSE DATEADD(second, @retryAfterSeconds, SYSUTCDATETIME()) END
+            WHERE Id = @SessionId AND GradingState = @running AND GradingAttempts = @Attempt
+            """,
+            new { claim.SessionId, claim.Attempt, state, error, retryAfterSeconds, running = GradingStates.Running },
+            cancellationToken: ct));
+    }
+
+    /// <summary>Puts a claimed job back in the queue without using up an attempt (the worker is shutting down).</summary>
+    public async Task ReleaseGradingAsync(GradingClaim claim, CancellationToken ct)
+    {
+        await using var db = Open();
+        await db.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE dbo.Sessions
+            SET GradingState = @pending, GradingAttempts = GradingAttempts - 1, GradingStartedAt = NULL
+            WHERE Id = @SessionId AND GradingState = @running AND GradingAttempts = @Attempt
+            """,
+            new { claim.SessionId, claim.Attempt, pending = GradingStates.Pending, running = GradingStates.Running },
+            cancellationToken: ct));
+    }
 }
+
+public sealed record GradingClaim(Guid SessionId, int Attempt);

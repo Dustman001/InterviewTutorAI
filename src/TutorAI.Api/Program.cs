@@ -109,8 +109,10 @@ builder.Services.AddSingleton<TokenService>();
 builder.Services.AddSingleton<UserSeeder>();
 builder.Services.AddHostedService<UserSeederStartup>();
 builder.Services.AddSingleton<TutorChat>();
-builder.Services.AddSingleton<CefrGrader>();
+builder.Services.AddSingleton<ICefrGrader, CefrGrader>();
 builder.Services.AddSingleton<AssessmentService>();
+builder.Services.AddSingleton<GradingSignal>();
+builder.Services.AddHostedService<GradingWorker>();
 builder.Services.AddHttpClient<SpeechTokenService>();
 
 var app = builder.Build();

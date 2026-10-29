@@ -8,33 +8,58 @@ import { CEFR_LEVELS, formatDate, scenarioTitle } from "@/lib/format";
 const DIMENSIONS = ["fluency", "grammar", "vocabulary", "interaction", "pronunciation"] as const;
 type Dimension = (typeof DIMENSIONS)[number];
 
+/** How often the page checks on a session that is being scored. */
+const POLL_MS = 3000;
+
+function isScoring(detail: SessionDetail) {
+  return detail.grading.state === "Pending" || detail.grading.state === "Running";
+}
+
 export default function Summary({ id }: { id: string }) {
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [scoring, setScoring] = useState(false);
+  // Bumped by "Try again" to restart loading and polling.
+  const [attempt, setAttempt] = useState(0);
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function load(first: boolean) {
       try {
         let loaded = await api.getSession(id);
-        // Ended without a stored assessment (e.g. grading failed earlier): try again.
-        if (!loaded.assessment && loaded.session.status === "Ended") {
-          if (!cancelled) setScoring(true);
-          const assessment = await api.endSession(id);
-          loaded = { ...loaded, assessment };
+        // Ended but never queued (e.g. the browser closed mid-way through ending): queue it once.
+        if (first && !loaded.assessment && loaded.session.status === "Ended" && loaded.grading.state === null) {
+          await api.endSession(id);
+          loaded = await api.getSession(id);
         }
-        if (!cancelled) setDetail(loaded);
+        if (cancelled) return;
+        setDetail(loaded);
+        if (isScoring(loaded)) timer = setTimeout(() => void load(false), POLL_MS);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Could not load the summary.");
-      } finally {
-        if (!cancelled) setScoring(false);
       }
-    })();
+    }
+
+    void load(true);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [id]);
+  }, [id, attempt]);
+
+  async function tryAgain() {
+    setRetrying(true);
+    try {
+      await api.endSession(id);
+      setAttempt((n) => n + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not restart scoring.");
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   if (error) {
     return (
@@ -52,7 +77,7 @@ export default function Summary({ id }: { id: string }) {
   if (!detail) {
     return (
       <main className="shell">
-        <p className="hint">{scoring ? "Scoring your session… this can take up to a minute." : "Loading…"}</p>
+        <p className="hint">Loading…</p>
       </main>
     );
   }
@@ -69,10 +94,25 @@ export default function Summary({ id }: { id: string }) {
         {assessment && ` · ${assessment.metrics.fluency.totalWords} words spoken`}
       </p>
 
-      {!assessment && (
+      {session.status === "Active" && !assessment && (
         <div className="banner">
           This session is still in progress. <Link href={`/session/${id}`}>Go back to it</Link> and choose “End &amp;
           score”.
+        </div>
+      )}
+
+      {!assessment && isScoring(detail) && (
+        <p className="hint" role="status">
+          Scoring your session… this usually takes under a minute. You can leave this page and come back.
+        </p>
+      )}
+
+      {!assessment && detail.grading.state === "Failed" && (
+        <div className="banner" role="alert">
+          {detail.grading.error ?? "Scoring failed."}{" "}
+          <button onClick={tryAgain} disabled={retrying}>
+            {retrying ? "Starting…" : "Try again"}
+          </button>
         </div>
       )}
 

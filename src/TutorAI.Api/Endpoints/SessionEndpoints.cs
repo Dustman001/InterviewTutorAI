@@ -20,7 +20,11 @@ public sealed record TurnDto(
     long Id, int Seq, string Role, string Text, DateTime StartedAt, int? DurationMs, int WordCount,
     double? AccuracyScore, double? FluencyScore, double? ProsodyScore);
 
-public sealed record SessionDetailDto(SessionDto Session, IReadOnlyList<TurnDto> Turns, AssessmentResponse? Assessment);
+/// <param name="State">Pending, Running, Done or Failed; null when the session was never queued for grading.</param>
+public sealed record GradingDto(string? State, string? Error);
+
+public sealed record SessionDetailDto(
+    SessionDto Session, IReadOnlyList<TurnDto> Turns, AssessmentResponse? Assessment, GradingDto Grading);
 
 public static class SessionEndpoints
 {
@@ -80,11 +84,15 @@ public static class SessionEndpoints
             }
 
             var turns = await repository.GetTurnsAsync(id, includePronunciationJson: false, ct);
-            return Results.Ok(new SessionDetailDto(ToDto(session), [.. turns.Select(ToDto)], await assessments.GetAsync(id, ct)));
+            return Results.Ok(new SessionDetailDto(
+                ToDto(session), [.. turns.Select(ToDto)], await assessments.GetAsync(id, ct),
+                new GradingDto(session.GradingState, session.GradingState == GradingStates.Failed ? session.GradingError : null)));
         });
 
         sessions.MapPost("/{id:guid}/turns", PostTurnAsync).RequireRateLimiting(TurnsPolicy);
 
+        // 200 with the assessment when it's ready (stored already, or too short to grade); otherwise 202 with
+        // the grading state, and the client polls GET /api/sessions/{id} until grading is Done or Failed.
         sessions.MapPost("/{id:guid}/end", async (
             Guid id, bool? regrade, ClaimsPrincipal user, SessionRepository repository, AssessmentService assessments,
             CancellationToken ct) =>
@@ -94,9 +102,12 @@ public static class SessionEndpoints
                 return Results.NotFound();
             }
 
-            return await assessments.EndAndAssessAsync(id, regrade ?? false, ct) is { } result
-                ? Results.Ok(result)
-                : Results.NotFound();
+            return await assessments.EndAsync(id, regrade ?? false, ct) switch
+            {
+                null => Results.NotFound(),
+                { Assessment: { } assessment } => Results.Ok(assessment),
+                { GradingState: var state } => Results.Accepted($"/api/sessions/{id}", new { state }),
+            };
         });
     }
 

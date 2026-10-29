@@ -16,6 +16,17 @@ public static class SessionStatus
     public const string Ended = "Ended";
 }
 
+/// <summary>Where a session's background grading stands (Sessions.GradingState). NULL: never queued.</summary>
+public static class GradingStates
+{
+    public const string Pending = "Pending";
+    public const string Running = "Running";
+    public const string Done = "Done";
+    public const string Failed = "Failed";
+
+    public static bool InProgress(string? state) => state is Pending or Running;
+}
+
 public static class TurnRoles
 {
     public const string User = "user";
@@ -46,6 +57,11 @@ public sealed class SessionRow
     public string Status { get; set; } = SessionStatus.Active;
     /// <summary>NULL for sessions created before sign-in existed.</summary>
     public int? UserId { get; set; }
+    public string? GradingState { get; set; }
+    public int GradingAttempts { get; set; }
+    public string? GradingError { get; set; }
+    public DateTime? GradingStartedAt { get; set; }
+    public DateTime? GradingNextAttemptAt { get; set; }
 }
 
 public sealed class TurnRow

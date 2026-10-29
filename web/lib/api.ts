@@ -95,10 +95,14 @@ export interface Assessment {
   createdAt: string;
 }
 
+export type GradingState = "Pending" | "Running" | "Done" | "Failed";
+
 export interface SessionDetail {
   session: Session;
   turns: Turn[];
   assessment: Assessment | null;
+  /** state is null when the session was never queued for grading; error is set only when Failed. */
+  grading: { state: GradingState | null; error: string | null };
 }
 
 export interface SpeechToken {
@@ -204,7 +208,9 @@ export const api = {
     request<Session>("/api/sessions", { method: "POST", body: JSON.stringify({ mode, scenario }) }),
   listSessions: () => request<SessionSummary[]>("/api/sessions"),
   getSession: (id: string) => request<SessionDetail>(`/api/sessions/${id}`),
-  endSession: (id: string) => request<Assessment>(`/api/sessions/${id}/end`, { method: "POST" }),
+  /** The assessment when it's ready (200), otherwise the grading state (202): poll getSession until it's done. */
+  endSession: (id: string) =>
+    request<Assessment | { state: GradingState }>(`/api/sessions/${id}/end`, { method: "POST" }),
   speechToken: () => request<SpeechToken>("/api/speech/token"),
   me: () => request<CurrentUser>("/api/auth/me"),
 };

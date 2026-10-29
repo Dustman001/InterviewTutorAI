@@ -60,4 +60,17 @@ public sealed class AssessmentOptions
 {
     /// <summary>Below this many user words the session is reported as too short to grade.</summary>
     public int MinUserWords { get; set; } = 150;
+
+    /// <summary>Attempts per grading before it is marked Failed. The SDK also retries each call twice.</summary>
+    public int MaxGradingAttempts { get; set; } = 3;
+    /// <summary>
+    /// Wait before attempt 2, 3, ...; the last value repeats. Empty means 15 s, then 60 s. (No default values
+    /// here: the configuration binder appends configured items to an array's existing ones.)
+    /// </summary>
+    public int[] RetryDelaySeconds { get; set; } = [];
+    public int GradingTimeoutSeconds { get; set; } = 300;
+    /// <summary>A Running grading claimed longer ago than this is taken to be orphaned (the worker stopped) and claimed again.</summary>
+    public int StaleGradingMinutes { get; set; } = 10;
+    /// <summary>Gradings that run at once on one API instance.</summary>
+    public int GradingConcurrency { get; set; } = 2;
 }

@@ -3,6 +3,8 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace TutorAI.Tests.Integration;
 
@@ -23,8 +25,23 @@ internal static class TestApi
     /// <param name="settings">Extra configuration, e.g. ("Sessions:MaxUserTurns", "2").</param>
     public static WebApplicationFactory<Program> Create(
         string connectionString, string? adminPassword, params (string Key, string Value)[] settings) =>
+        Create(connectionString, adminPassword, null, settings);
+
+    /// <param name="services">Replaces services, e.g. a fake <see cref="TutorAI.Api.Assessment.ICefrGrader"/>.</param>
+    public static WebApplicationFactory<Program> CreateWithServices(
+        string connectionString, Action<IServiceCollection> services, params (string Key, string Value)[] settings) =>
+        Create(connectionString, null, services, settings);
+
+    private static WebApplicationFactory<Program> Create(
+        string connectionString, string? adminPassword, Action<IServiceCollection>? services,
+        (string Key, string Value)[] settings) =>
         new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
+            if (services is not null)
+            {
+                builder.ConfigureTestServices(services);
+            }
+
             builder
                 .UseSetting("ConnectionStrings:TutorAI", connectionString)
                 // Test accounts must not be overridden by secrets in the developer's vault.

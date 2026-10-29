@@ -216,11 +216,27 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
             .RootElement.GetProperty("text").GetString()!;
     }
 
+    /// <summary>Ends the session and waits for the background grading (real Claude) to finish.</summary>
     private static async Task<AssessmentResponse> EndAsync(HttpClient client, Guid sessionId)
     {
         var response = await client.PostAsync($"/api/sessions/{sessionId}/end", null);
-        Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
-        return (await response.Content.ReadFromJsonAsync<AssessmentResponse>(Json))!;
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+
+        var deadline = DateTime.UtcNow.AddMinutes(5);
+        while (true)
+        {
+            var detail = await client.GetFromJsonAsync<JsonElement>($"/api/sessions/{sessionId}");
+            var grading = detail.GetProperty("grading");
+            var state = grading.GetProperty("state").GetString();
+            Assert.NotEqual("Failed", state);
+            if (state == "Done")
+            {
+                return detail.GetProperty("assessment").Deserialize<AssessmentResponse>(Json)!;
+            }
+
+            Assert.True(DateTime.UtcNow < deadline, $"Grading did not finish: {grading}");
+            await Task.Delay(TimeSpan.FromSeconds(2));
+        }
     }
 
     private void AssertStored(Guid sessionId, int expectedTurns)
