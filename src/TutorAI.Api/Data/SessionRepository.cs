@@ -146,6 +146,34 @@ public sealed class SessionRepository(IConfiguration configuration)
             row, cancellationToken: ct));
     }
 
+    /// <summary>
+    /// The user's graded sessions (an overall level exists), oldest first: the latest <paramref name="max"/>.
+    /// The measurements come from the stored metrics JSON, so no extra columns are needed.
+    /// </summary>
+    public async Task<IReadOnlyList<ProgressRow>> GetProgressAsync(int userId, string? mode, int max, CancellationToken ct)
+    {
+        await using var db = Open();
+        var rows = await db.QueryAsync<ProgressRow>(new CommandDefinition(
+            """
+            SELECT SessionId, StartedAt, Mode, Fluency, Grammar, Vocabulary, Interaction, Pronunciation, Overall,
+                   WordsPerMinute, PauseRatio, PronunciationScore
+            FROM (
+                SELECT TOP (@max) s.Id AS SessionId, s.StartedAt, s.Mode,
+                       a.Fluency, a.Grammar, a.Vocabulary, a.Interaction, a.Pronunciation, a.Overall,
+                       TRY_CAST(JSON_VALUE(a.MetricsJson, '$.fluency.wordsPerMinute') AS FLOAT) AS WordsPerMinute,
+                       TRY_CAST(JSON_VALUE(a.MetricsJson, '$.fluency.pauseRatio') AS FLOAT) AS PauseRatio,
+                       TRY_CAST(JSON_VALUE(a.MetricsJson, '$.pronunciation.composite') AS FLOAT) AS PronunciationScore
+                FROM dbo.Sessions s
+                JOIN dbo.Assessments a ON a.SessionId = s.Id
+                WHERE s.UserId = @userId AND a.Overall IS NOT NULL AND (@mode IS NULL OR s.Mode = @mode)
+                ORDER BY s.StartedAt DESC, s.Id DESC
+            ) latest
+            ORDER BY StartedAt, SessionId
+            """,
+            new { userId, mode, max }, cancellationToken: ct));
+        return rows.AsList();
+    }
+
     /// <summary>Claude tokens per user and model since <paramref name="since"/>: tutor turns plus assessments.</summary>
     public async Task<IReadOnlyList<UserModelUsage>> GetUsageByUserAsync(DateTime since, CancellationToken ct)
     {
@@ -318,5 +346,10 @@ public sealed record SessionCursor(DateTime StartedAt, Guid Id)
         }
     }
 }
+
+public sealed record ProgressRow(
+    Guid SessionId, DateTime StartedAt, string Mode, string? Fluency, string? Grammar, string? Vocabulary,
+    string? Interaction, string? Pronunciation, string Overall, double? WordsPerMinute, double? PauseRatio,
+    double? PronunciationScore);
 
 public sealed record UserModelUsage(int UserId, string Model, long Input, long Output, long CacheRead, long CacheWrite);

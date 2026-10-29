@@ -114,6 +114,29 @@ export interface SessionDetail {
   grading: { state: GradingState | null; error: string | null };
 }
 
+/** One graded session on the progress page. */
+export interface ProgressPoint {
+  sessionId: string;
+  startedAt: string;
+  mode: Mode;
+  fluency: string | null;
+  grammar: string | null;
+  vocabulary: string | null;
+  interaction: string | null;
+  pronunciation: string | null;
+  overall: string;
+  wordsPerMinute: number | null;
+  pauseRatio: number | null;
+  pronunciationScore: number | null;
+}
+
+export interface Progress {
+  userId: number;
+  username: string;
+  /** Oldest first. */
+  points: ProgressPoint[];
+}
+
 export interface SpeechToken {
   token: string;
   region: string;
@@ -231,6 +254,14 @@ export const api = {
   endSession: (id: string) =>
     request<Assessment | { state: GradingState }>(`/api/sessions/${id}/end`, { method: "POST" }),
   speechToken: () => request<SpeechToken>("/api/speech/token"),
+  /** userId: admins only; others get their own progress. */
+  progress: (mode?: Mode, userId?: number) => {
+    const query = new URLSearchParams();
+    if (mode) query.set("mode", mode);
+    if (userId) query.set("userId", String(userId));
+    const qs = query.toString();
+    return request<Progress>(qs ? `/api/progress?${qs}` : "/api/progress");
+  },
   me: () => request<CurrentUser>("/api/auth/me"),
 };
 

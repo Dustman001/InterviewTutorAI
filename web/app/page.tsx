@@ -91,6 +91,7 @@ export default function Home() {
               : ` · ${sessionsLeft} of ${user.sessionLimit} sessions left`}
           </span>
           <span className="userbar-actions">
+            <Link href="/progress">Progress</Link>
             <Link href="/account">Account</Link>
             {user.role === "Admin" && <Link href="/users">Manage users</Link>}
             <button type="button" onClick={() => void signOut()}>

@@ -187,6 +187,7 @@ app.MapGet("/api/speech/token", async (SpeechTokenService speech, CancellationTo
 app.MapAuthEndpoints();
 app.MapUserEndpoints();
 app.MapSessionEndpoints();
+app.MapProgressEndpoints();
 
 app.Run();
 

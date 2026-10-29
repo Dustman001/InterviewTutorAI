@@ -124,6 +124,12 @@ export default function Summary({ id }: { id: string }) {
 
       {assessment?.sufficient && <Graded assessment={assessment} />}
 
+      {assessment?.sufficient && (
+        <p className="meta">
+          <Link href="/progress">See your progress</Link> across sessions.
+        </p>
+      )}
+
       <details className="card">
         <summary>Transcript</summary>
         <div className="transcript static">
