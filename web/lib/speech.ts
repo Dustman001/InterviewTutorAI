@@ -36,7 +36,7 @@ export class SpeechEngine {
 
   /** @param sessionId The session whose accent sets the recognition locale and the tutor's voice. */
   static async create(events: SpeechEvents, sessionId?: string): Promise<SpeechEngine> {
-    const [sdk, token] = await Promise.all([import("microsoft-cognitiveservices-speech-sdk"), api.speechToken(sessionId)]);
+    const [sdk, token] = await Promise.all([import("microsoft-cognitiveservices-speech-sdk"), api.speechToken({ sessionId })]);
 
     const config = sdk.SpeechConfig.fromAuthorizationToken(token.token, token.region);
     config.speechRecognitionLanguage = token.locale;

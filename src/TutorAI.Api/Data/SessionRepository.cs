@@ -1,5 +1,6 @@
 using Dapper;
 using Microsoft.Data.SqlClient;
+using TutorAI.Api.Practice;
 
 namespace TutorAI.Api.Data;
 
@@ -97,13 +98,13 @@ public sealed class SessionRepository(IConfiguration configuration)
         return await db.QuerySingleAsync<TurnRow>(new CommandDefinition(
             """
             INSERT INTO dbo.Turns (SessionId, Seq, Role, Text, DurationMs, WordCount,
-                                   AccuracyScore, FluencyScore, ProsodyScore, PronunciationJson,
+                                   AccuracyScore, FluencyScore, ProsodyScore, PronunciationJson, ScoresRejected,
                                    Model, InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens)
             OUTPUT inserted.*
             SELECT @SessionId,
                    ISNULL((SELECT MAX(Seq) FROM dbo.Turns WITH (UPDLOCK, HOLDLOCK) WHERE SessionId = @SessionId), 0) + 1,
                    @Role, @Text, @DurationMs, @WordCount,
-                   @AccuracyScore, @FluencyScore, @ProsodyScore, @PronunciationJson,
+                   @AccuracyScore, @FluencyScore, @ProsodyScore, @PronunciationJson, @ScoresRejected,
                    @Model, @InputTokens, @OutputTokens, @CacheReadTokens, @CacheWriteTokens
             """,
             turn, cancellationToken: ct));
@@ -128,22 +129,32 @@ public sealed class SessionRepository(IConfiguration configuration)
             "SELECT * FROM dbo.Assessments WHERE SessionId = @sessionId", new { sessionId }, cancellationToken: ct));
     }
 
-    public async Task<AssessmentRow> SaveAssessmentAsync(AssessmentRow row, CancellationToken ct)
+    /// <summary>Replaces the session's assessment and, in the same transaction, adds its practice items.</summary>
+    public async Task<AssessmentRow> SaveAssessmentAsync(AssessmentRow row, CancellationToken ct, PracticeBatch? practice = null)
     {
         await using var db = Open();
-        return await db.QuerySingleAsync<AssessmentRow>(new CommandDefinition(
+        await db.OpenAsync(ct);
+        await using var transaction = await db.BeginTransactionAsync(ct);
+        var saved = await db.QuerySingleAsync<AssessmentRow>(new CommandDefinition(
             """
             DELETE FROM dbo.Assessments WHERE SessionId = @SessionId;
 
             INSERT INTO dbo.Assessments (SessionId, Fluency, Grammar, Vocabulary, Interaction, Pronunciation,
-                                         Overall, MetricsJson, DetailJson, Model,
+                                         Overall, MetricsJson, DetailJson, Model, PromptVersion,
                                          InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens)
             OUTPUT inserted.*
             VALUES (@SessionId, @Fluency, @Grammar, @Vocabulary, @Interaction, @Pronunciation,
-                    @Overall, @MetricsJson, @DetailJson, @Model,
+                    @Overall, @MetricsJson, @DetailJson, @Model, @PromptVersion,
                     @InputTokens, @OutputTokens, @CacheReadTokens, @CacheWriteTokens);
             """,
-            row, cancellationToken: ct));
+            row, transaction, cancellationToken: ct));
+        if (practice is not null)
+        {
+            await PracticeRepository.UpsertAsync(db, transaction, practice, ct);
+        }
+
+        await transaction.CommitAsync(ct);
+        return saved;
     }
 
     /// <summary>

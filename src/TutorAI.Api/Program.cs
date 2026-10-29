@@ -18,9 +18,15 @@ using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
 using TutorAI.Api.Endpoints;
 using TutorAI.Api.Health;
+using TutorAI.Api.Practice;
 using TutorAI.Api.Speech;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Every timestamp column is datetime2. Dapper's default DateTime parameter type is datetime, which rounds to
+// 1/300 s and makes exact comparisons and cursors unreliable.
+Dapper.SqlMapper.AddTypeMap(typeof(DateTime), System.Data.DbType.DateTime2);
+Dapper.SqlMapper.AddTypeMap(typeof(DateTime?), System.Data.DbType.DateTime2);
 
 // In Azure, secrets come from Key Vault. Secret names use "--" for ":" (e.g. Anthropic--ApiKey).
 // Locally, leave KeyVault:Uri empty and use dotnet user-secrets instead.
@@ -119,6 +125,7 @@ builder.Services.AddSingleton(_ =>
 });
 builder.Services.AddSingleton<SessionRepository>();
 builder.Services.AddSingleton<UserRepository>();
+builder.Services.AddSingleton<PracticeRepository>();
 builder.Services.AddSingleton<IPasswordHasher<UserRow>, PasswordHasher<UserRow>>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<TokenService>();
@@ -168,12 +175,19 @@ app.MapGet("/api/health/ready", async (ReadinessCheck readiness, CancellationTok
 app.MapGet("/api/speech/accents", (IOptions<AzureSpeechOptions> options) =>
     AccentCatalog.All(options.Value).Select(a => new { id = a.Id, label = a.Label, prosody = a.ProsodyAssessed }));
 
-// A short-lived Azure Speech token. With sessionId, the locale and voice are that session's accent.
+// A short-lived Azure Speech token. With sessionId, the locale and voice are that session's accent; with
+// accent (a locale, as practice items carry), that accent's. An accent no longer in the allowlist falls back
+// to the default, as it does for sessions.
 app.MapGet("/api/speech/token", async (
-    Guid? sessionId, ClaimsPrincipal user, SessionRepository sessions, IOptions<AzureSpeechOptions> options,
+    Guid? sessionId, string? accent, ClaimsPrincipal user, SessionRepository sessions, IOptions<AzureSpeechOptions> options,
     SpeechTokenService speech, CancellationToken ct) =>
 {
-    Accent? accent = null;
+    Accent? chosen = null;
+    if (accent is not null && sessionId is null)
+    {
+        chosen = AccentCatalog.Find(options.Value, accent) ?? AccentCatalog.Default(options.Value);
+    }
+
     if (sessionId is { } id)
     {
         var session = await sessions.GetSessionAsync(id, ct);
@@ -184,7 +198,7 @@ app.MapGet("/api/speech/token", async (
 
         var scenario = System.Text.Json.JsonSerializer.Deserialize<Scenario>(session.ScenarioJson, System.Text.Json.JsonSerializerOptions.Web);
         // An accent since removed from configuration falls back to the default.
-        accent = AccentCatalog.Find(options.Value, scenario?.Accent) ?? AccentCatalog.Default(options.Value);
+        chosen = AccentCatalog.Find(options.Value, scenario?.Accent) ?? AccentCatalog.Default(options.Value);
     }
 
     if (!speech.IsConfigured)
@@ -196,7 +210,7 @@ app.MapGet("/api/speech/token", async (
 
     try
     {
-        return Results.Ok(await speech.IssueAsync(ct, accent));
+        return Results.Ok(await speech.IssueAsync(ct, chosen));
     }
     catch (HttpRequestException ex)
     {
@@ -210,6 +224,7 @@ app.MapAuthEndpoints();
 app.MapUserEndpoints();
 app.MapSessionEndpoints();
 app.MapProgressEndpoints();
+app.MapPracticeEndpoints();
 
 app.Run();
 

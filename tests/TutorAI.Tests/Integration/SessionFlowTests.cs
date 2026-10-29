@@ -106,6 +106,8 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
         var (recognized, phrases) = await SpeakAndAssessAsync(LearnerTurns[0]);
 
         Assert.Contains("Portugal", recognized);
+        // Real results pass the plausibility checks the API runs on every turn.
+        Assert.Null(TurnScoreCheck.Problem(recognized, AzurePronunciation.ParseTurn(phrases), durationMs: null));
         var metrics = AssessmentService.ComputeMetrics(
         [
             new TurnRow

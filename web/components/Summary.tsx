@@ -245,6 +245,9 @@ function Graded({ assessment }: { assessment: Assessment }) {
       {detail && detail.topCorrections.length > 0 && (
         <section className="card">
           <h2>Corrections</h2>
+          <p className="hint no-print">
+            Practise corrections and difficult words from your sessions on the <Link href="/practice">Practice</Link> page.
+          </p>
           <ul className="corrections">
             {detail.topCorrections.map((c, i) => (
               <li key={i}>

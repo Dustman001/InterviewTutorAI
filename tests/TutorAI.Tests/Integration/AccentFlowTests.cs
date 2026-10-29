@@ -56,6 +56,7 @@ public sealed class AccentFlowTests(ThrowawayDatabase database) : IClassFixture<
             voice: "en-GB-SoniaNeural", locale: "en-GB", prosody: false);
 
         Assert.Contains("flat", recognized, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(TurnScoreCheck.Problem(recognized, AzurePronunciation.ParseTurn(phrases), durationMs: null));
         var metrics = AssessmentService.ComputeMetrics(
         [
             new TurnRow

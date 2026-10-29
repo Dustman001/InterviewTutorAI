@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { api, signOut, type AccentChoice, type CurrentUser, type Mode, type SessionSummary } from "@/lib/api";
+import { api, practice, signOut, type AccentChoice, type CurrentUser, type Mode, type SessionSummary } from "@/lib/api";
 import { formatDate, scenarioTitle } from "@/lib/format";
 
 const TOPICS = ["Small talk", "Travel", "Work and career", "Technology", "Opinions and debate"];
@@ -30,6 +30,7 @@ export default function Home() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [user, setUser] = useState<CurrentUser | null>(null);
+  const [practiceDue, setPracticeDue] = useState<number | null>(null);
 
   useEffect(() => {
     api
@@ -43,6 +44,11 @@ export default function Home() {
       .me()
       .then(setUser)
       .catch((e: Error) => setError(e.message));
+    // Optional: the count only links to the practice page.
+    practice
+      .due(0)
+      .then((due) => setPracticeDue(due.dueCount))
+      .catch(() => setPracticeDue(null));
     // Optional: without the list, sessions use the default accent.
     api
       .accents()
@@ -98,6 +104,7 @@ export default function Home() {
               : ` · ${sessionsLeft} of ${user.sessionLimit} sessions left`}
           </span>
           <span className="userbar-actions">
+            <Link href="/practice">Practice</Link>
             <Link href="/progress">Progress</Link>
             <Link href="/account">Account</Link>
             {user.role === "Admin" && <Link href="/users">Manage users</Link>}
@@ -109,6 +116,13 @@ export default function Home() {
       )}
       <h1>Speech tutor</h1>
       <p className="lead">Practise speaking English out loud, then see where you stand on the CEFR scale.</p>
+
+      {practiceDue !== null && practiceDue > 0 && (
+        <Link href="/practice" className="banner ok practice-due">
+          {practiceDue} practice item{practiceDue === 1 ? "" : "s"} due: corrections and words from your sessions. Practise
+          now →
+        </Link>
+      )}
 
       {error && (
         <div className="banner" role="alert">

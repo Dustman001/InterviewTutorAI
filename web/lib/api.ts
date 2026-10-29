@@ -264,9 +264,14 @@ export const api = {
   /** The assessment when it's ready (200), otherwise the grading state (202): poll getSession until it's done. */
   endSession: (id: string) =>
     request<Assessment | { state: GradingState }>(`/api/sessions/${id}/end`, { method: "POST" }),
-  /** With a session id, the locale and voice are that session's accent. */
-  speechToken: (sessionId?: string) =>
-    request<SpeechToken>(sessionId ? `/api/speech/token?sessionId=${encodeURIComponent(sessionId)}` : "/api/speech/token"),
+  /** The locale and voice are the session's accent, or the given accent; otherwise the default. */
+  speechToken: (choice?: { sessionId?: string; accent?: string | null }) => {
+    const query = new URLSearchParams();
+    if (choice?.sessionId) query.set("sessionId", choice.sessionId);
+    else if (choice?.accent) query.set("accent", choice.accent);
+    const qs = query.toString();
+    return request<SpeechToken>(qs ? `/api/speech/token?${qs}` : "/api/speech/token");
+  },
   accents: () => request<AccentChoice[]>("/api/speech/accents"),
   /** userId: admins only; others get their own progress. */
   progress: (mode?: Mode, userId?: number) => {
@@ -277,6 +282,51 @@ export const api = {
     return request<Progress>(qs ? `/api/progress?${qs}` : "/api/progress");
   },
   me: () => request<CurrentUser>("/api/auth/me"),
+};
+
+export interface PracticeItem {
+  id: number;
+  kind: "correction" | "word";
+  /** What to read aloud. */
+  target: string;
+  /** Corrections: what the learner said. */
+  original: string | null;
+  explanation: string | null;
+  /** The accent to practise in; null for the default. */
+  locale: string | null;
+  /** 0-4; a pass moves it up. */
+  box: number;
+  /** null once mastered. */
+  dueAt: string | null;
+  attempts: number;
+  lastScore: number | null;
+  bestScore: number | null;
+  sessionId: string | null;
+}
+
+export interface PracticeDue {
+  /** Longest overdue first. */
+  items: PracticeItem[];
+  dueCount: number;
+  activeCount: number;
+  masteredCount: number;
+  nextDueAt: string | null;
+}
+
+export interface PracticeAttempt {
+  score: number;
+  passed: boolean;
+  /** The words to read, as Azure heard them; accuracy is null for a word left out. */
+  words: { word: string; accuracy: number | null; errorType: string }[];
+  item: PracticeItem;
+}
+
+export const practice = {
+  due: (limit?: number) => request<PracticeDue>(limit === undefined ? "/api/practice/due" : `/api/practice/due?limit=${limit}`),
+  /** phrases: Azure's raw results for one reading; the API scores it. */
+  attempt: (id: number, phrases: unknown[]) =>
+    request<PracticeAttempt>(`/api/practice/${id}/attempts`, { method: "POST", body: JSON.stringify({ phrases }) }),
+  remove: (id: number) => request<void>(`/api/practice/${id}`, { method: "DELETE" }),
 };
 
 /** Admin-only user management. */

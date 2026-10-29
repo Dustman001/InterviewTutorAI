@@ -26,14 +26,21 @@ public interface ICefrGrader
     /// <summary>The model id stored with the assessment.</summary>
     string Model { get; }
 
+    /// <summary>Stored with the assessment, so a grade can be traced to the prompt that produced it.</summary>
+    string PromptVersion { get; }
+
     /// <param name="usage">Filled in with the call's token counts.</param>
     Task<GradingResult> GradeAsync(
         SessionRow session, IReadOnlyList<TurnRow> turns, FluencyStats fluency, ClaudeUsage usage, CancellationToken ct);
 }
 
 /// <summary>Grades the learner's side of a transcript against the CEFR spoken-language descriptors using Claude.</summary>
-public sealed class CefrGrader(AnthropicClient client, IOptions<AnthropicOptions> options) : ICefrGrader
+public sealed class CefrGrader(
+    AnthropicClient client, IOptions<AnthropicOptions> options, IOptions<AssessmentOptions> assessment) : ICefrGrader
 {
+    /// <summary>Change this whenever the system prompt, the schema or the request format changes.</summary>
+    public const string CurrentPromptVersion = "2026-10-29";
+
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     private const string SystemPrompt =
@@ -154,6 +161,8 @@ public sealed class CefrGrader(AnthropicClient client, IOptions<AnthropicOptions
 
     public string Model => options.Value.GradingModel;
 
+    public string PromptVersion => CurrentPromptVersion;
+
     public async Task<GradingResult> GradeAsync(
         SessionRow session, IReadOnlyList<TurnRow> turns, FluencyStats fluency, ClaudeUsage usage, CancellationToken ct)
     {
@@ -164,7 +173,13 @@ public sealed class CefrGrader(AnthropicClient client, IOptions<AnthropicOptions
             {
                 Model = Model,
                 MaxTokens = 16000,
-                System = SystemPrompt,
+                // Cached only on request: a single grading can't reuse the entry before it expires.
+                System = assessment.Value.CacheGraderPrompt
+                    ? (MessageCreateParamsSystem)new List<TextBlockParam>
+                    {
+                        new() { Text = SystemPrompt, CacheControl = new CacheControlEphemeral() },
+                    }
+                    : SystemPrompt,
                 OutputConfig = new OutputConfig
                 {
                     Effort = Effort.High,
