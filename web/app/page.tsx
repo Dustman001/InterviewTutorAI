@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { api, signOut, type CurrentUser, type Mode, type SessionSummary } from "@/lib/api";
+import { api, signOut, type AccentChoice, type CurrentUser, type Mode, type SessionSummary } from "@/lib/api";
 import { formatDate, scenarioTitle } from "@/lib/format";
 
 const TOPICS = ["Small talk", "Travel", "Work and career", "Technology", "Opinions and debate"];
@@ -22,6 +22,8 @@ export default function Home() {
   const [jobDescription, setJobDescription] = useState("");
   const [difficulty, setDifficulty] = useState("Normal");
   const [duration, setDuration] = useState(10);
+  const [accents, setAccents] = useState<AccentChoice[]>([]);
+  const [accent, setAccent] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
@@ -41,6 +43,11 @@ export default function Home() {
       .me()
       .then(setUser)
       .catch((e: Error) => setError(e.message));
+    // Optional: without the list, sessions use the default accent.
+    api
+      .accents()
+      .then(setAccents)
+      .catch(() => setAccents([]));
   }, []);
 
   const sessionsLeft = user?.sessionLimit == null ? null : Math.max(0, user.sessionLimit - user.sessionsUsed);
@@ -68,8 +75,8 @@ export default function Home() {
       const session = await api.createSession(
         mode,
         mode === "Conversation"
-          ? { topic: customTopic.trim() || topic, difficulty, durationMinutes: duration }
-          : { role, seniority, interviewType, jobDescription, difficulty, durationMinutes: duration },
+          ? { topic: customTopic.trim() || topic, difficulty, durationMinutes: duration, accent }
+          : { role, seniority, interviewType, jobDescription, difficulty, durationMinutes: duration, accent },
       );
       router.push(`/session/${session.id}`);
     } catch (e) {
@@ -196,6 +203,18 @@ export default function Home() {
               ))}
             </select>
           </label>
+          {accents.length > 1 && (
+            <label className="field">
+              <span>Accent</span>
+              <select value={accent ?? accents[0].id} onChange={(e) => setAccent(e.target.value)}>
+                {accents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="field">
             <span>Length</span>
             <select value={duration} onChange={(e) => setDuration(Number(e.target.value))}>

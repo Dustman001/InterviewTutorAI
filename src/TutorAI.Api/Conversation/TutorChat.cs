@@ -5,6 +5,7 @@ using Anthropic;
 using Anthropic.Models.Messages;
 using Microsoft.Extensions.Options;
 using TutorAI.Api.Data;
+using TutorAI.Api.Speech;
 
 namespace TutorAI.Api.Conversation;
 
@@ -19,7 +20,8 @@ public sealed class ClaudeUsage
 }
 
 /// <summary>Produces the tutor's next spoken turn with Claude, streamed as text fragments.</summary>
-public sealed class TutorChat(AnthropicClient client, IOptions<AnthropicOptions> options, ILogger<TutorChat> logger)
+public sealed class TutorChat(
+    AnthropicClient client, IOptions<AnthropicOptions> options, IOptions<AzureSpeechOptions> speech, ILogger<TutorChat> logger)
 {
     private const string RefusalFallback = "Sorry, I can't continue with that. Let's talk about something else. What would you like to discuss?";
 
@@ -40,7 +42,11 @@ public sealed class TutorChat(AnthropicClient client, IOptions<AnthropicOptions>
             // The scenario prompt is fixed for the whole session: a cache read point every turn can reuse.
             System = new List<TextBlockParam>
             {
-                new() { Text = ScenarioPrompts.Build(session, scenario), CacheControl = new CacheControlEphemeral() },
+                new()
+                {
+                    Text = ScenarioPrompts.Build(session, scenario, AccentCatalog.Find(speech.Value, scenario.Accent)?.PromptNote),
+                    CacheControl = new CacheControlEphemeral(),
+                },
             },
             // Automatic caching moves a second breakpoint to the end of the growing conversation, so each
             // turn reads everything before it from the cache. Turns are seconds apart: the 5-minute TTL fits.

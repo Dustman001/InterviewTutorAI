@@ -34,8 +34,9 @@ export class SpeechEngine {
     private readonly events: SpeechEvents,
   ) {}
 
-  static async create(events: SpeechEvents): Promise<SpeechEngine> {
-    const [sdk, token] = await Promise.all([import("microsoft-cognitiveservices-speech-sdk"), api.speechToken()]);
+  /** @param sessionId The session whose accent sets the recognition locale and the tutor's voice. */
+  static async create(events: SpeechEvents, sessionId?: string): Promise<SpeechEngine> {
+    const [sdk, token] = await Promise.all([import("microsoft-cognitiveservices-speech-sdk"), api.speechToken(sessionId)]);
 
     const config = sdk.SpeechConfig.fromAuthorizationToken(token.token, token.region);
     config.speechRecognitionLanguage = token.locale;
@@ -53,7 +54,8 @@ export class SpeechEngine {
       sdk.PronunciationAssessmentGranularity.Phoneme,
       false,
     );
-    assessment.enableProsodyAssessment = true;
+    // Prosody is scored for en-US only; other accents are assessed on accuracy and fluency.
+    assessment.enableProsodyAssessment = token.prosody;
     assessment.applyTo(recognizer);
 
     // A null audio config returns the audio instead of playing it, so playback can be queued and interrupted.

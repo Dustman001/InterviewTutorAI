@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Anthropic;
 using Azure.Identity;
@@ -163,8 +164,29 @@ app.MapGet("/api/health/ready", async (ReadinessCheck readiness, CancellationTok
     return Results.Json(result, statusCode: result.Ready ? StatusCodes.Status200OK : StatusCodes.Status503ServiceUnavailable);
 }).AllowAnonymous();
 
-app.MapGet("/api/speech/token", async (SpeechTokenService speech, CancellationToken ct) =>
+// The accents a session can be created with, the default first.
+app.MapGet("/api/speech/accents", (IOptions<AzureSpeechOptions> options) =>
+    AccentCatalog.All(options.Value).Select(a => new { id = a.Id, label = a.Label, prosody = a.ProsodyAssessed }));
+
+// A short-lived Azure Speech token. With sessionId, the locale and voice are that session's accent.
+app.MapGet("/api/speech/token", async (
+    Guid? sessionId, ClaimsPrincipal user, SessionRepository sessions, IOptions<AzureSpeechOptions> options,
+    SpeechTokenService speech, CancellationToken ct) =>
 {
+    Accent? accent = null;
+    if (sessionId is { } id)
+    {
+        var session = await sessions.GetSessionAsync(id, ct);
+        if (session is null || (!user.IsAdmin() && session.UserId != user.UserId()))
+        {
+            return Results.NotFound();
+        }
+
+        var scenario = System.Text.Json.JsonSerializer.Deserialize<Scenario>(session.ScenarioJson, System.Text.Json.JsonSerializerOptions.Web);
+        // An accent since removed from configuration falls back to the default.
+        accent = AccentCatalog.Find(options.Value, scenario?.Accent) ?? AccentCatalog.Default(options.Value);
+    }
+
     if (!speech.IsConfigured)
     {
         return Results.Json(
@@ -174,7 +196,7 @@ app.MapGet("/api/speech/token", async (SpeechTokenService speech, CancellationTo
 
     try
     {
-        return Results.Ok(await speech.IssueAsync(ct));
+        return Results.Ok(await speech.IssueAsync(ct, accent));
     }
     catch (HttpRequestException ex)
     {

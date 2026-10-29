@@ -8,6 +8,7 @@ using TutorAI.Api.Assessment;
 using TutorAI.Api.Auth;
 using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
+using TutorAI.Api.Speech;
 
 namespace TutorAI.Api.Endpoints;
 
@@ -60,7 +61,7 @@ public static class SessionEndpoints
 
         sessions.MapPost("/", async (
             CreateSessionRequest request, ClaimsPrincipal user, SessionRepository repository, UserRepository users,
-            IOptions<SessionLimitsOptions> limits, CancellationToken ct) =>
+            IOptions<SessionLimitsOptions> limits, IOptions<AzureSpeechOptions> speech, CancellationToken ct) =>
         {
             if (!SessionModes.IsValid(request.Mode))
             {
@@ -71,6 +72,17 @@ public static class SessionEndpoints
             if (SessionRules.ScenarioProblem(scenario, limits.Value) is { } problem)
             {
                 return Results.BadRequest(new { error = problem });
+            }
+
+            if (scenario.Accent is not null)
+            {
+                if (AccentCatalog.Find(speech.Value, scenario.Accent) is not { } accent)
+                {
+                    var allowed = string.Join(", ", AccentCatalog.All(speech.Value).Select(a => a.Id));
+                    return Results.BadRequest(new { error = $"Accent must be one of: {allowed}." });
+                }
+
+                scenario = scenario with { Accent = accent.Id };
             }
             var row = await repository.CreateSessionAsync(user.UserId(), request.Mode, JsonSerializer.Serialize(scenario, Json), ct);
             if (row is null)

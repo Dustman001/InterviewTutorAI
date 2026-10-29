@@ -10,6 +10,15 @@ export interface Scenario {
   jobDescription?: string | null;
   difficulty?: string | null;
   durationMinutes: number;
+  /** A locale from GET /api/speech/accents, e.g. "en-GB". Missing: the default accent. */
+  accent?: string | null;
+}
+
+export interface AccentChoice {
+  id: string;
+  label: string;
+  /** Whether Azure scores prosody for it (en-US only). */
+  prosody: boolean;
 }
 
 export interface Session {
@@ -142,6 +151,8 @@ export interface SpeechToken {
   region: string;
   locale: string;
   voice: string;
+  /** Request prosody assessment: Azure supports it for en-US only. */
+  prosody: boolean;
 }
 
 export interface CurrentUser {
@@ -253,7 +264,10 @@ export const api = {
   /** The assessment when it's ready (200), otherwise the grading state (202): poll getSession until it's done. */
   endSession: (id: string) =>
     request<Assessment | { state: GradingState }>(`/api/sessions/${id}/end`, { method: "POST" }),
-  speechToken: () => request<SpeechToken>("/api/speech/token"),
+  /** With a session id, the locale and voice are that session's accent. */
+  speechToken: (sessionId?: string) =>
+    request<SpeechToken>(sessionId ? `/api/speech/token?sessionId=${encodeURIComponent(sessionId)}` : "/api/speech/token"),
+  accents: () => request<AccentChoice[]>("/api/speech/accents"),
   /** userId: admins only; others get their own progress. */
   progress: (mode?: Mode, userId?: number) => {
     const query = new URLSearchParams();

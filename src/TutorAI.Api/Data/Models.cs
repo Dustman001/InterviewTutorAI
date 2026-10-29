@@ -40,7 +40,9 @@ public sealed record Scenario(
     string? InterviewType = null,
     string? JobDescription = null,
     string? Difficulty = null,
-    int DurationMinutes = 10);
+    int DurationMinutes = 10,
+    /// <summary>A locale from AzureSpeech:Accents, e.g. en-GB. Null: the default accent.</summary>
+    string? Accent = null);
 
 public sealed record CreateSessionRequest(string Mode, Scenario? Scenario);
 

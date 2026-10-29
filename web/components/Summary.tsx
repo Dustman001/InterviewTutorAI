@@ -192,6 +192,12 @@ function Graded({ assessment }: { assessment: Assessment }) {
                   <Stat label="Prosody" value={pronunciation.prosody} />
                   <Stat label="Words assessed" value={pronunciation.assessedWords} />
                 </dl>
+                {pronunciation.prosody === null && (
+                  <p className="hint">
+                    Rhythm and intonation (prosody) are only measured for American English, so this level is based on
+                    accuracy alone and is less reliable than for American English sessions.
+                  </p>
+                )}
                 {pronunciation.weakestWords.length > 0 && (
                   <>
                     <h3>Words to practise</h3>

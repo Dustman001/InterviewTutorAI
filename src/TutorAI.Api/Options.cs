@@ -4,8 +4,11 @@ public sealed class AzureSpeechOptions
 {
     public string? Key { get; set; }
     public string? Region { get; set; }
+    /// <summary>The default accent's locale and voice, used when a session doesn't choose one.</summary>
     public string Locale { get; set; } = "en-US";
     public string Voice { get; set; } = "en-US-AvaMultilingualNeural";
+    /// <summary>The accents a learner may choose, keyed by locale (the allowlist). See appsettings.json.</summary>
+    public Dictionary<string, TutorAI.Api.Speech.AccentOptions> Accents { get; set; } = [];
 }
 
 public sealed class AnthropicOptions
