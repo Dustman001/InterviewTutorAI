@@ -896,6 +896,105 @@ details.card > summary {
   gap: 0.5rem 1rem;
 }
 
+/* Practice drills */
+.practice-due {
+  display: block;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.practice-counts {
+  margin: 0 0 1rem;
+}
+
+.practice-card .was {
+  margin: 0.25rem 0 0;
+}
+
+.practice-target {
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1.35;
+  margin: 0.35rem 0 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.practice-target.word {
+  font-size: 2rem;
+}
+
+.practice-card .buttons {
+  margin-top: 1rem;
+}
+
+.practice-remove {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.practice-score {
+  margin: 0.75rem 0 0.25rem;
+}
+
+.practice-score strong {
+  font-size: 1.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.practice-words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.6rem;
+  margin: 0.5rem 0;
+  font-size: 1.1rem;
+}
+
+/* Word ratings carry a label and a score as well as colour. */
+.rated {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  border-bottom: 3px solid currentColor;
+  padding-bottom: 0.1rem;
+}
+
+.rated small {
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+.rated.good {
+  color: var(--accent);
+}
+
+.rated.fair {
+  color: var(--warn-ink);
+  border-bottom-style: dashed;
+}
+
+.rated.poor {
+  color: var(--danger);
+  border-bottom-style: dotted;
+}
+
+.rated.missed {
+  color: var(--muted);
+  text-decoration: line-through;
+  border-bottom-color: transparent;
+}
+
+.practice-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.practice-legend .rated {
+  flex-direction: row;
+  font-size: 0.85rem;
+}
+
 /* Printable session report (Print / Save as PDF on the summary page). */
 @media print {
   @page {

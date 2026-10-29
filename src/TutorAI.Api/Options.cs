@@ -76,4 +76,9 @@ public sealed class AssessmentOptions
     public int StaleGradingMinutes { get; set; } = 10;
     /// <summary>Gradings that run at once on one API instance.</summary>
     public int GradingConcurrency { get; set; } = 2;
+    /// <summary>
+    /// Cache the grader's system prompt. A cache entry lives 5 minutes, so this only pays off when gradings run
+    /// back to back, as in calibration runs; off by default.
+    /// </summary>
+    public bool CacheGraderPrompt { get; set; }
 }

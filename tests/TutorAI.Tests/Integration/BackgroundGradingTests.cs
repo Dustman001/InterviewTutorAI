@@ -255,9 +255,13 @@ internal sealed class FakeGrader : ICefrGrader
 
     public TimeSpan Delay { get; init; }
 
+    public List<Correction> Corrections { get; init; } = [];
+
     public int Calls => Volatile.Read(ref _calls);
 
     public string Model => ModelName;
+
+    public string PromptVersion => "fake-1";
 
     public async Task<GradingResult> GradeAsync(
         SessionRow session, IReadOnlyList<TurnRow> turns, FluencyStats fluency, ClaudeUsage usage, CancellationToken ct)
@@ -276,6 +280,6 @@ internal sealed class FakeGrader : ICefrGrader
             throw new HttpRequestException($"Fake grading failure {call}.");
         }
 
-        return new GradingResult(Grade, Grade, Grade, Grade, "You did well.", []);
+        return new GradingResult(Grade, Grade, Grade, Grade, "You did well.", Corrections);
     }
 }

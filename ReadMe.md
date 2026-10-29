@@ -28,6 +28,7 @@ goes in `appsettings.json` or App Service app settings.
 | `Anthropic:ConversationModel` / `GradingModel` | no | – | `appsettings.json` (override with app settings if needed) |
 | `Auth:AdminUsername` / `TokenLifetimeMinutes` | no | – | `appsettings.json` (`admin`, `15`) |
 | `AzureSpeech:Accents` | no | – | `appsettings.json` (see [Accents](#accents)) |
+| `Assessment:CacheGraderPrompt` | no | – | Off. Caches the grader's prompt; only worth it for back-to-back gradings (see [Grading calibration](#grading-calibration)) |
 
 How it works: when `KeyVault:Uri` is set, `Program.cs` adds Key Vault as a configuration source and
 signs in with `DefaultAzureCredential` (the App Service managed identity in Azure, your `az login`
@@ -128,6 +129,14 @@ transcript. Code: `src/TutorAI.Api/Assessment`.
 1. **Evidence collected during the session.** Azure AI Speech transcribes each learner turn and runs
    pronunciation assessment on it: accuracy and prosody scores, plus per-word timings and error types.
    Only the learner's turns are measured and graded.
+
+   Recognition runs in the browser, so the API checks each turn's results before storing them
+   (`TurnScoreCheck`). Every score must be within 0-100, and word timings must be in order. The words
+   must last no longer than the turn did, give or take a few seconds. At least 70% of the assessed
+   words must appear in the turn's text. A turn that fails is kept, but without scores
+   (`Turns.ScoresRejected` says why), so it counts toward the transcript and not toward pronunciation
+   or fluency. These checks catch edited or mismatched results, not a careful forgery. That would need
+   recognition on the server, which isn't planned while grades are for self-study.
 2. **Minimum amount of speech.** Below 150 learner words (`Assessment:MinUserWords`), the session is
    reported as too short and no levels are given.
 3. **Measurements computed in code.**
@@ -165,6 +174,23 @@ with the transcript expanded.
 pronunciation score over time, and compares the last 5 sessions with the 5 before. Admins can open
 any user's progress from the Users page (`GET /api/progress?userId=`).
 
+### Practice drills
+
+Grading a session adds its corrections (the corrected sentence) and its weakest words to the learner's
+**Practice** list (`/practice`, linked from the user bar; the home page shows how many are due). A target
+the learner already has is merged into the existing item, which starts again from the first step.
+
+The learner reads each item aloud. The browser runs Azure's pronunciation assessment **with the target as
+reference text**, and the API scores the raw result itself (`ScriptedAssessment`). The score is the mean
+word accuracy, with left-out words counting zero. A result that doesn't cover the target (another
+sentence was read) is refused. A score of 80 or more moves the item up a step: the next review is 1, 3,
+7 and then 21 days later, and passing the fifth step masters it. A lower score sends it back to the first
+step, due again at once. Items are practised in the accent of the session they came from.
+
+API: `GET /api/practice/due`, `POST /api/practice/{id}/attempts` with `{ phrases }` (Azure's detailed
+results), `DELETE /api/practice/{id}`. Items live in `dbo.PracticeItems` and are deleted with their
+user.
+
 ### Accents
 
 Learners pick the English they practise when they start a session: American (the default), British,
@@ -195,6 +221,37 @@ Grading a long session takes a while, so `/end` doesn't wait for it:
 - The worker reads the queue only when there may be work: at startup, when a session ends, and when a
   retry falls due. It doesn't poll while idle, so a serverless database can still pause.
 
+### Grading calibration
+
+`tests/TutorAI.Tests/Calibration` checks the grader against human ratings. Each sample in
+`Calibration/samples/*.json` is one session rated by a qualified teacher:
+
+```jsonc
+{
+  "id": "travel-b1-01",
+  "rater": "Name, qualification",
+  "mode": "Conversation",                      // or Interview
+  "scenario": { "topic": "Travel", "durationMinutes": 10 },
+  "turns": [ { "role": "tutor", "text": "..." }, { "role": "learner", "text": "..." } ],
+  "fluency": { ... },                          // optional: the session's stored metrics.fluency
+  "pronunciationComposite": 74.2,              // optional: metrics.pronunciation.composite
+  "levels": { "fluency": "B1", "grammar": "A2+", "vocabulary": "B1", "interaction": "B1",
+              "pronunciation": "B1" }          // pronunciation optional
+}
+```
+
+Run it with `$env:TUTORAI_CALIBRATION = "1"; dotnet test --filter Category=Calibration`. It grades each
+sample 3 times (`TUTORAI_CALIBRATION_REPEATS`) with the real grader and writes a Markdown report to the
+test output and to `bin/.../TestResults/calibration/`. The report covers each criterion's exact and
+within-one-step agreement, its bias and how consistent the repeats are. It also gives suggested
+pronunciation thresholds from the rated samples. The run fails if any criterion is within one step in
+fewer than 85% of gradings (`TUTORAI_CALIBRATION_BAR`). It costs one Opus call per sample per repeat,
+about $0.05 each, with the grader prompt cached. `TUTORAI_CALIBRATION_DIR` points it at another folder.
+
+No rated samples are checked in yet; around 30-50 sessions spread across A2-C1 are needed. Each
+assessment stores the grader's `PromptVersion` (`CefrGrader.CurrentPromptVersion`). Change that constant
+whenever the prompt changes, so stored grades can be traced and calibration results compared.
+
 ## Run locally
 
 ```powershell
@@ -222,7 +279,7 @@ against a SQL Server service container, without Claude or Speech keys. It also l
 unit-tests and builds the web app.
 
 Web tests: `npm test` (in `web/`) runs the unit tests (Vitest): the event-stream parser, sentence
-splitting for speech, and the live session's phase changes. `npm run test:e2e` runs a browser smoke
+splitting for speech, the live session's phase changes, and the progress and practice helpers. `npm run test:e2e` runs a browser smoke
 test (Playwright, using the installed Chrome) against a running stack. It signs in, types a
 conversation, ends it and waits for the grades. It runs only when `TUTORAI_E2E_WEB` (e.g.
 `http://localhost:3000`), `TUTORAI_E2E_USER` and `TUTORAI_E2E_PASSWORD` are set. It calls Claude for

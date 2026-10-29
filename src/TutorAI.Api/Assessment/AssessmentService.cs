@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Options;
 using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
+using TutorAI.Api.Practice;
 
 namespace TutorAI.Api.Assessment;
 
@@ -25,7 +26,8 @@ public sealed record AssessmentResponse(
 public sealed record EndResult(AssessmentResponse? Assessment, string? GradingState);
 
 public sealed class AssessmentService(
-    SessionRepository repository, ICefrGrader grader, GradingSignal signal, IOptions<AssessmentOptions> options)
+    SessionRepository repository, ICefrGrader grader, GradingSignal signal, IOptions<AssessmentOptions> options,
+    TimeProvider clock)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -68,7 +70,10 @@ public sealed class AssessmentService(
         return new EndResult(null, state);
     }
 
-    /// <summary>Grades the session from its stored turns and saves the assessment. Called by the grading worker.</summary>
+    /// <summary>
+    /// Grades the session from its stored turns and saves the assessment, with the session's corrections and weak
+    /// words as practice items for its owner. Called by the grading worker.
+    /// </summary>
     public async Task GradeAsync(Guid sessionId, CancellationToken ct)
     {
         var session = await repository.GetSessionAsync(sessionId, ct)
@@ -77,10 +82,19 @@ public sealed class AssessmentService(
         var metrics = ComputeMetrics(turns);
 
         var row = Insufficient(sessionId, metrics);
+        PracticeBatch? practice = null;
         if (row is null)
         {
             var usage = new ClaudeUsage();
             var grading = await grader.GradeAsync(session, turns, metrics.Fluency, usage, ct);
+            if (session.UserId is { } userId)
+            {
+                var accent = JsonSerializer.Deserialize<Scenario>(session.ScenarioJson, Json)?.Accent;
+                practice = new PracticeBatch(
+                    userId, sessionId, accent, clock.GetUtcNow().UtcDateTime,
+                    PracticeSeeds.FromAssessment(grading, metrics.Pronunciation));
+            }
+
             row = new AssessmentRow
             {
                 SessionId = sessionId,
@@ -94,6 +108,7 @@ public sealed class AssessmentService(
                     : null,
                 DetailJson = JsonSerializer.Serialize(grading, Json),
                 Model = grader.Model,
+                PromptVersion = grader.PromptVersion,
                 InputTokens = (int)usage.InputTokens,
                 OutputTokens = (int)usage.OutputTokens,
                 CacheReadTokens = (int)usage.CacheReadTokens,
@@ -102,7 +117,7 @@ public sealed class AssessmentService(
             row.Overall = CefrMapper.Median([row.Fluency, row.Grammar, row.Vocabulary, row.Interaction, row.Pronunciation]);
         }
 
-        await repository.SaveAssessmentAsync(row, ct);
+        await repository.SaveAssessmentAsync(row, ct, practice);
     }
 
     /// <summary>The "too short to grade" assessment, or null when the learner spoke enough.</summary>

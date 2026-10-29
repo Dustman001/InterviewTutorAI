@@ -196,6 +196,16 @@ public static class SessionEndpoints
         else
         {
             var phrases = AzurePronunciation.ParseTurn(request.Phrases);
+            // Implausible scores are dropped, not refused: the conversation goes on, the turn just isn't scored.
+            var rejected = TurnScoreCheck.Problem(text, phrases, request.DurationMs);
+            if (rejected is not null)
+            {
+                loggerFactory.CreateLogger(typeof(SessionEndpoints)).LogWarning(
+                    "Dropped the speech scores of a turn in session {SessionId}: {Reason}", id, rejected);
+                Telemetry.ScoresRejected.Add(1);
+                phrases = [];
+            }
+
             turns.Add(await repository.AddTurnAsync(
                 new TurnRow
                 {
@@ -207,7 +217,10 @@ public static class SessionEndpoints
                     AccuracyScore = AzurePronunciation.WeightedMean(phrases, p => p.Accuracy),
                     FluencyScore = AzurePronunciation.WeightedMean(phrases, p => p.Fluency),
                     ProsodyScore = AzurePronunciation.WeightedMean(phrases, p => p.Prosody),
-                    PronunciationJson = request.Phrases is { Length: > 0 } ? JsonSerializer.Serialize(request.Phrases) : null,
+                    PronunciationJson = rejected is null && request.Phrases is { Length: > 0 }
+                        ? JsonSerializer.Serialize(request.Phrases)
+                        : null,
+                    ScoresRejected = rejected,
                 },
                 ct));
         }

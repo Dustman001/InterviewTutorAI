@@ -80,7 +80,9 @@ public sealed class SessionPagingTests(ThrowawayDatabase database) : IClassFixtu
     private List<Guid> SeedSessions(int userId, int count, int sameTimePerGroup, int startOffsetMinutes = -1000)
     {
         using var db = database.Open();
-        var start = db.ExecuteScalar<DateTime>("SELECT DATEADD(minute, @startOffsetMinutes, SYSUTCDATETIME())", new { startOffsetMinutes });
+        // Whole milliseconds, as StartedAt stores them, so the StartedAt >= @start filter below can't drop the first group.
+        var start = db.ExecuteScalar<DateTime>(
+            "SELECT CAST(DATEADD(minute, @startOffsetMinutes, SYSUTCDATETIME()) AS DATETIME2(3))", new { startOffsetMinutes });
         for (var i = 0; i < count; i++)
         {
             var startedAt = start.AddSeconds(i / sameTimePerGroup);
@@ -94,7 +96,14 @@ public sealed class SessionPagingTests(ThrowawayDatabase database) : IClassFixtu
         // The expected order is the database's own: newest first, then Id descending in SQL Server's ordering.
         return [.. db.Query<Guid>(
             "SELECT Id FROM dbo.Sessions WHERE UserId = @userId AND StartedAt >= @start ORDER BY StartedAt DESC, Id DESC",
-            new { userId, start })];
+            Params(new { userId }, ("start", start)))];
+    }
+
+    private static DynamicParameters Params(object values, (string Name, DateTime Value) date)
+    {
+        var p = new DynamicParameters(values);
+        p.Add(date.Name, date.Value, System.Data.DbType.DateTime2);
+        return p;
     }
 
     private int UserId(string username)
