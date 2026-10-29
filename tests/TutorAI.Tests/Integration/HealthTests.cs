@@ -25,6 +25,21 @@ public sealed class HealthTests(ThrowawayDatabase database) : IClassFixture<Thro
     }
 
     [E2EFact]
+    public async Task The_api_starts_and_serves_with_application_insights_configured()
+    {
+        // A well-formed connection string to an endpoint that doesn't exist: exporting fails quietly in the background.
+        await using var api = TestApi.Create(
+            database.ConnectionString, null,
+            ("APPLICATIONINSIGHTS_CONNECTION_STRING",
+             "InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://localhost:1/"));
+        var client = await TestApi.SignInAsync(api, TestApi.AdminUsername, TestApi.AdminPassword);
+
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/health")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/sessions")).StatusCode);
+        Assert.NotNull(api.Services.GetService(typeof(OpenTelemetry.Trace.TracerProvider)));
+    }
+
+    [E2EFact]
     public async Task Readiness_reports_a_wrong_anthropic_key_without_leaking_it()
     {
         const string wrongKey = "sk-ant-api03-not-a-real-key-0000000000";

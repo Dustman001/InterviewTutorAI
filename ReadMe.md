@@ -77,8 +77,8 @@ the new value. That's the way back in if the admin password is lost.
    fresh one (`POST /api/auth/refresh`), so an active user stays signed in and **15 minutes of
    inactivity signs the user out**. `web/proxy.ts` does the same for page loads, sends signed-out
    visitors to `/login`, and keeps non-admins out of `/users`.
-5. The API rejects any request without a valid token (401), except `/api/health` and
-   `/api/auth/login`. Each token carries the user's `TokenVersion`, checked against `dbo.Users` on
+5. The API rejects any request without a valid token (401), except `/api/health`,
+   `/api/health/ready` and `/api/auth/login`. Each token carries the user's `TokenVersion`, checked against `dbo.Users` on
    every request. That's how disabling a user, resetting a password or changing a role takes effect
    immediately instead of when the token expires.
 
@@ -110,8 +110,8 @@ These bound what a single session can cost. Settings are in the `Sessions` secti
 
 The tutor's replies use prompt caching. Each turn reads the scenario prompt and the conversation so
 far from Claude's cache (5-minute lifetime, renewed by every turn), so only the newest messages are
-billed at the full input price. Token counts, including cache reads and writes, are logged for each
-tutor turn.
+billed at the full input price. Token counts, including cache reads and writes, are stored with each
+tutor turn and assessment (see [Monitoring and cost](#monitoring-and-cost)).
 
 ## How sessions are evaluated
 
@@ -154,6 +154,24 @@ The result, with the measurements and Claude's detailed output, is stored in `db
 shown on the session summary page. Ending the same session again returns the stored result. Pass
 `?regrade=true` to grade it again.
 
+### Grading runs in the background
+
+Grading a long session takes a while, so `/end` doesn't wait for it:
+
+- A session too short to grade gets its result at once (`200`, no Claude call).
+- Otherwise `/end` answers `202 { "state": "Pending" }` and a background worker (`GradingWorker`)
+  grades it. `GET /api/sessions/{id}` reports `grading: { state, error }`, with state `Pending`,
+  `Running`, `Done` or `Failed`. The summary page polls every 3 seconds and shows the levels when
+  they're ready.
+- A failed attempt is retried after 15 s, then 60 s (`Assessment:RetryDelaySeconds`), 3 attempts in
+  all (`Assessment:MaxGradingAttempts`), each limited to 5 minutes. After the last one the summary
+  page shows the error and a **Try again** button, which calls `/end` again.
+- Jobs live in `dbo.Sessions`, so they survive restarts. A job left `Running` for more than 10 minutes
+  (an instance died mid-grading) is picked up again. With several API instances, each job goes to
+  exactly one of them.
+- The worker reads the queue only when there may be work: at startup, when a session ends, and when a
+  retry falls due. It doesn't poll while idle, so a serverless database can still pause.
+
 ## Run locally
 
 ```powershell
@@ -177,8 +195,15 @@ npm run dev                                            # http://localhost:3000
 Tests: `dotnet test` runs the unit tests. With the SQL container up, `$env:TUTORAI_E2E = "1"` also runs
 the integration tests against throwaway databases. Tests that call Claude or Azure Speech run only when
 those keys are in user-secrets. CI (`.github/workflows/ci.yml`) runs the unit and integration tests
-against a SQL Server service container, without Claude or Speech keys, and lints, type-checks and
-builds the web app.
+against a SQL Server service container, without Claude or Speech keys. It also lints, type-checks,
+unit-tests and builds the web app.
+
+Web tests: `npm test` (in `web/`) runs the unit tests (Vitest): the event-stream parser, sentence
+splitting for speech, and the live session's phase changes. `npm run test:e2e` runs a browser smoke
+test (Playwright, using the installed Chrome) against a running stack. It signs in, types a
+conversation, ends it and waits for the grades. It runs only when `TUTORAI_E2E_WEB` (e.g.
+`http://localhost:3000`), `TUTORAI_E2E_USER` and `TUTORAI_E2E_PASSWORD` are set. It calls Claude for
+real (about $0.10 a run).
 
 To run locally against the Azure Key Vault instead of user-secrets: `az login`, give your account the
 **Key Vault Secrets User** role on the vault, and set `dotnet user-secrets set "KeyVault:Uri" "https://<vault>.vault.azure.net/"`.
@@ -270,7 +295,9 @@ bare `CREATE DATABASE` gets a default General Purpose tier that costs far more t
 ```powershell
 az sql server create -n $sqlServer -g $rg -l $loc --admin-user $sqlAdmin --admin-password $sqlPassword
 az sql db create -g $rg -s $sqlServer -n TutorAI --service-objective Basic
-# Or, free (one per subscription; pauses when the monthly free amount is used up):
+# Or, free (one per subscription; pauses when the monthly free amount is used up). The free amount
+# lasts only if the database auto-pauses when idle, so nothing may query it on a timer.
+# /api/health deliberately doesn't (see step 8).
 # az sql db create -g $rg -s $sqlServer -n TutorAI --edition GeneralPurpose --compute-model Serverless `
 #   --family Gen5 --capacity 2 --use-free-limit --free-limit-exhaustion-behavior AutoPause
 
@@ -352,9 +379,14 @@ az webapp deploy -g $rg -n $apiApp --src-path publish/api.zip --type zip
 Check it:
 
 ```powershell
-Invoke-RestMethod "https://$apiApp.azurewebsites.net/api/health"
-# database: True   speechConfigured: True
+Invoke-RestMethod "https://$apiApp.azurewebsites.net/api/health/ready"
+# ready: True   database, anthropic and speech each { ok: True, latencyMs, detail }
 ```
+
+`/api/health` is what App Service probes about once a minute. It only says the process is up, and it
+never touches the database: a query every minute would keep a serverless database awake around the
+clock. `/api/health/ready` checks the database, the Anthropic API (a free model lookup) and Azure
+Speech. It answers 503 if any of them fails and caches its result for 60 seconds.
 
 If the API fails to start, it's usually Key Vault access: the role assignment hasn't propagated yet
 (restart the app after a couple of minutes) or `KeyVault__Uri` is wrong. See the log stream:
@@ -403,8 +435,8 @@ often finishes anyway.
 1. Open `https://<webApp>.azurewebsites.net`. You should land on the sign-in page. The site is served
    over HTTPS, which the browser requires for microphone access.
 2. Sign in as `admin` with the `Auth--AdminPassword` value. Start a short conversation, allow the microphone, speak a few turns, and end the session.
-3. The summary page should show CEFR levels (sessions under 150 learner words are reported as too
-   short to grade).
+3. The summary page should show "Scoring your session…", then the CEFR levels (sessions under 150
+   learner words are reported as too short to grade).
 
 ## Updating
 
@@ -415,6 +447,35 @@ often finishes anyway.
 | New migration script | Re-run step 7 before deploying the API |
 | Rotate a key or password | `az keyvault secret set ...` with the new value, then `az webapp restart -n $apiApp -g $rg` |
 | Sign everyone out | Rotate `Auth--JwtSigningKey` and restart the API |
+
+## Monitoring and cost
+
+**Application Insights (optional).** Attach Application Insights to the API web app (portal: the
+app's **Application Insights** blade), or set the `APPLICATIONINSIGHTS_CONNECTION_STRING` app setting
+yourself. When the setting is present, the API exports requests, logs, a span per Claude call
+(`claude.chat`, `claude.grade`, with model, session, user and token counts) and these metrics:
+
+| Metric | Tags |
+| --- | --- |
+| `tutorai.claude.tokens` | `model`, `kind` (input, output, cache_read, cache_write), `route` (chat, grade) |
+| `tutorai.turn.first_token_ms` | `model` |
+| `tutorai.grading.duration_ms` | `outcome` (done, failed) |
+| `tutorai.grading.failures` | `final`, `timed_out` |
+| `tutorai.logins.failed` | `reason` (password, locked, unknown_user) |
+
+Without the setting nothing is exported, as when running locally. For example, tokens per model per day:
+
+```kusto
+customMetrics
+| where name == "tutorai.claude.tokens"
+| summarize tokens = sum(valueSum) by model = tostring(customDimensions.model), bin(timestamp, 1d)
+```
+
+**Cost per user.** Each tutor turn and assessment stores its model and token counts (`dbo.Turns`,
+`dbo.Assessments`), so cost doesn't depend on telemetry retention. The Users page shows each user's
+tokens and estimated cost over the last 30 days. The estimate uses the `Pricing` section of
+`appsettings.json` (USD per million tokens per model), not the bill. Update the prices when they change
+or when you switch models. A model with no price is counted but not costed, shown as "≥ $…".
 
 ## Hardening (optional)
 

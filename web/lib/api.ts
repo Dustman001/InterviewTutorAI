@@ -1,3 +1,5 @@
+import { createSseParser } from "./sse";
+
 export type Mode = "Conversation" | "Interview";
 
 export interface Scenario {
@@ -258,34 +260,20 @@ export async function streamTurn(
   }
 
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-  let buffer = "";
   let reply = "";
+  const parser = createSseParser(({ event, data }) => {
+    const parsed = JSON.parse(data);
+    if (event === "delta") {
+      reply += parsed.text;
+      onDelta(parsed.text);
+    } else if (event === "error") {
+      throw new Error(parsed.message);
+    }
+  });
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
-    buffer += value;
-
-    let boundary: number;
-    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
-      const block = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-
-      let event = "message";
-      let data = "";
-      for (const line of block.split("\n")) {
-        if (line.startsWith("event:")) event = line.slice(6).trim();
-        else if (line.startsWith("data:")) data += line.slice(5).trim();
-      }
-      if (!data) continue;
-
-      const parsed = JSON.parse(data);
-      if (event === "delta") {
-        reply += parsed.text;
-        onDelta(parsed.text);
-      } else if (event === "error") {
-        throw new Error(parsed.message);
-      }
-    }
+    parser.push(value);
   }
   return reply;
 }

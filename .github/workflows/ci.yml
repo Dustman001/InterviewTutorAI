@@ -43,7 +43,7 @@ jobs:
       - run: dotnet test --no-build --configuration Release --logger "console;verbosity=normal"
 
   web:
-    name: Web (lint, type-check, build)
+    name: Web (lint, type-check, unit tests, build)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -59,4 +59,5 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npx tsc --noEmit
+      - run: npm test
       - run: npm run build

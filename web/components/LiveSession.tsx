@@ -6,8 +6,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, streamTurn, TURN_LIMITS, type Session, type TurnPayload } from "@/lib/api";
 import { SentenceBuffer, SpeechEngine } from "@/lib/speech";
 import { scenarioTitle } from "@/lib/format";
-
-type Phase = "loading" | "ready" | "starting" | "tutor" | "listening" | "paused" | "ending";
+import {
+  acceptsSpokenTurn,
+  acceptsTypedTurn,
+  isLive,
+  nextPhase,
+  type Phase,
+  type PhaseEvent,
+} from "@/lib/session-machine";
 
 interface Line {
   key: string;
@@ -53,9 +59,12 @@ export default function LiveSession({ id }: { id: string }) {
   const pauseRef = useRef(pauseMs);
   const transcriptRef = useRef<HTMLDivElement>(null);
 
-  const setPhase = useCallback((next: Phase) => {
+  // Applied to the ref and the state together: the speech callbacks read the phase synchronously.
+  const transition = useCallback((event: PhaseEvent) => {
+    const next = nextPhase(phaseRef.current, event);
     phaseRef.current = next;
     setPhaseState(next);
+    return next;
   }, []);
 
   const clearTurnTimer = () => {
@@ -66,7 +75,7 @@ export default function LiveSession({ id }: { id: string }) {
   const runTutorTurn = useCallback(
     async (payload: TurnPayload | null) => {
       const engine = engineRef.current;
-      setPhase("tutor");
+      if (transition({ type: "tutorTurn" }) !== "tutor") return;
       engine?.setListening(false);
 
       const controller = new AbortController();
@@ -102,13 +111,13 @@ export default function LiveSession({ id }: { id: string }) {
       setLines((all) => all.filter((line) => line.key !== key || line.text.trim()));
       if (abortRef.current === controller) {
         abortRef.current = null;
-        if (phaseRef.current === "tutor") {
-          setPhase("listening");
+        const before = phaseRef.current;
+        if (transition({ type: "tutorFinished" }) !== before) {
           engineRef.current?.setListening(true);
         }
       }
     },
-    [id, setPhase],
+    [id, transition],
   );
 
   const sendTurn = useCallback(
@@ -125,7 +134,7 @@ export default function LiveSession({ id }: { id: string }) {
 
   const finalizeSpokenTurn = useCallback(() => {
     const { texts, phrases, startedAt } = pendingRef.current;
-    if (texts.length === 0 || phaseRef.current !== "listening") return;
+    if (texts.length === 0 || !acceptsSpokenTurn(phaseRef.current)) return;
     sendTurn(texts.join(" "), phrases, startedAt ? Date.now() - startedAt : undefined);
   }, [sendTurn]);
 
@@ -150,7 +159,7 @@ export default function LiveSession({ id }: { id: string }) {
         setLines(detail.turns.map((t) => ({ key: `turn-${t.id}`, role: t.role, text: t.text })));
         const stored = Number(window.localStorage.getItem(PAUSE_STORAGE_KEY));
         if (PAUSE_OPTIONS.some((o) => o.ms === stored)) setPauseMs(stored);
-        setPhase("ready");
+        transition({ type: "loaded" });
       })
       .catch((e: Error) => !cancelled && setError(e.message));
 
@@ -161,7 +170,7 @@ export default function LiveSession({ id }: { id: string }) {
       engineRef.current?.dispose();
       engineRef.current = null;
     };
-  }, [id, router, setPhase]);
+  }, [id, router, transition]);
 
   useEffect(() => {
     if (!session) return;
@@ -177,7 +186,7 @@ export default function LiveSession({ id }: { id: string }) {
   }, [lines, draft, interim]);
 
   async function start() {
-    setPhase("starting");
+    transition({ type: "start" });
     setError(null);
     try {
       engineRef.current = await SpeechEngine.create({
@@ -213,7 +222,7 @@ export default function LiveSession({ id }: { id: string }) {
     if (lines.length === 0) {
       await runTutorTurn(null);
     } else {
-      setPhase("listening");
+      transition({ type: "listen" });
       engineRef.current?.setListening(true);
     }
   }
@@ -227,9 +236,9 @@ export default function LiveSession({ id }: { id: string }) {
     if (phase === "listening") {
       clearTurnTimer();
       engineRef.current?.setListening(false);
-      setPhase("paused");
+      transition({ type: "pause" });
     } else if (phase === "paused") {
-      setPhase("listening");
+      transition({ type: "resume" });
       engineRef.current?.setListening(true);
       if (pendingRef.current.texts.length > 0) {
         timerRef.current = setTimeout(() => handlersRef.current.finalizeSpokenTurn(), pauseRef.current);
@@ -240,9 +249,9 @@ export default function LiveSession({ id }: { id: string }) {
   function submitTyped(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = typed.trim();
-    if (!text || (phase !== "listening" && phase !== "paused")) return;
+    if (!text || !acceptsTypedTurn(phase)) return;
     setTyped("");
-    if (phase === "paused") setPhase("listening");
+    transition({ type: "resume" });
     sendTurn(text, []);
   }
 
@@ -251,7 +260,7 @@ export default function LiveSession({ id }: { id: string }) {
     abortRef.current?.abort();
     engineRef.current?.dispose();
     engineRef.current = null;
-    setPhase("ending");
+    transition({ type: "end" });
     try {
       await api.endSession(id);
       router.push(`/session/${id}/summary`);
@@ -267,7 +276,7 @@ export default function LiveSession({ id }: { id: string }) {
   }
 
   const planned = (session?.scenario.durationMinutes ?? 10) * 60;
-  const live = phase === "tutor" || phase === "listening" || phase === "paused";
+  const live = isLive(phase);
   const status = {
     loading: "Loading…",
     ready: lines.length ? "Ready to continue" : "Ready when you are",
@@ -275,7 +284,7 @@ export default function LiveSession({ id }: { id: string }) {
     tutor: "Tutor is speaking",
     listening: voiceOff ? "Your turn — type below" : "Listening — your turn",
     paused: "Paused",
-    ending: "Scoring your session… this can take up to a minute",
+    ending: "Ending the session…",
   }[phase];
 
   return (
