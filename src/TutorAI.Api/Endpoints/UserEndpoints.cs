@@ -170,7 +170,7 @@ public static partial class UserEndpoints
         });
     }
 
-    private static string? PasswordProblem(string? password) =>
+    internal static string? PasswordProblem(string? password) =>
         password is null || password.Length < MinPasswordLength
             ? $"Passwords need at least {MinPasswordLength} characters."
             : password.Length > 200 ? "Passwords can be at most 200 characters." : null;
