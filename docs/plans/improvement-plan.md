@@ -318,7 +318,7 @@ between pages.
 the transcript, avoid page breaks inside cards. Add a **Print / Save as PDF** button
 (`window.print()`). No server change.
 
-**Phase B (only if asked for).** Read-only share links: table `dbo.SessionShares` (`Token`
+**Phase B: dropped (2026-10-29). Printing is enough.** The design is kept for reference. Read-only share links: table `dbo.SessionShares` (`Token`
 random 32 bytes, `SessionId`, `ExpiresAt`, `RevokedAt`), an anonymous `GET /api/share/{token}`
 returning the summary without user details, and a `/share/[token]` page that `proxy.ts` lets
 through. Expiry is 14 days by default, revocable by the owner.
@@ -422,6 +422,7 @@ session.
 
 1. **CI host:** GitHub or Azure DevOps? (P15)
 2. **Labelled transcripts:** who rates the calibration sessions, and how many can they do? (P13)
-3. **Share links:** needed, or is printing enough? (P12 phase B)
-4. **Cost limits:** are the P1 defaults (150 learner turns, 2000 characters per turn, 5-minute grace)
-   right for how guests use the app?
+3. **Share links:** decided 2026-10-29, printing is enough; P12 phase B is dropped.
+4. **Cost limits:** decided 2026-10-29, keep the shipped defaults (150 learner turns, 4000 characters and
+   100 phrases per turn, 5-minute grace, 20 turns a minute). Review them against the Users page's 30-day
+   usage once guests have used the app for a couple of weeks; each is a `Sessions:*` setting.
