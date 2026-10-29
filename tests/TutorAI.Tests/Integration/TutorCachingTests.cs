@@ -1,4 +1,7 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Text;
+using TutorAI.Api;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using TutorAI.Api.Conversation;
@@ -26,6 +29,45 @@ public sealed class TutorCachingTests(ThrowawayDatabase database) : IClassFixtur
         };
         var turns = new List<TurnRow>();
         var usages = new List<ClaudeUsage>();
+
+        var spans = new List<Activity>();
+        using var spanListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == Telemetry.Name,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity =>
+            {
+                if (Equals(activity.GetTagItem("tutorai.session_id"), session.Id))
+                {
+                    lock (spans) spans.Add(activity);
+                }
+            },
+        };
+        ActivitySource.AddActivityListener(spanListener);
+
+        long chatTokens = 0;
+        using var meterListener = new MeterListener
+        {
+            InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name == Telemetry.Name && instrument.Name == "tutorai.claude.tokens")
+                {
+                    listener.EnableMeasurementEvents(instrument);
+                }
+            },
+        };
+        meterListener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+        {
+            // Other test classes may make Claude calls in parallel; they count too, so only a lower bound is checked.
+            foreach (var tag in tags)
+            {
+                if (tag is { Key: "route", Value: Telemetry.ChatRoute })
+                {
+                    Interlocked.Add(ref chatTokens, value);
+                }
+            }
+        });
+        meterListener.Start();
 
         foreach (var learner in new[]
         {
@@ -58,5 +100,15 @@ public sealed class TutorCachingTests(ThrowawayDatabase database) : IClassFixtur
         Assert.True(usages[2].CacheReadTokens > usages[1].CacheReadTokens, report);
         // Uncached input per turn stays small: only the newest messages are billed at the full price.
         Assert.True(usages[2].InputTokens < usages[2].CacheReadTokens, report);
+
+        Assert.Equal(3, spans.Count);
+        Assert.All(spans, span =>
+        {
+            Assert.Equal("claude.chat", span.OperationName);
+            Assert.Equal("claude-sonnet-5-5", span.GetTagItem("gen_ai.request.model"));
+            Assert.True((long)span.GetTagItem("gen_ai.usage.output_tokens")! > 0);
+        });
+        var expected = usages.Sum(u => u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens);
+        Assert.True(Interlocked.Read(ref chatTokens) >= expected, $"metric {chatTokens}, usage {expected}");
     }
 }

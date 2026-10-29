@@ -148,6 +148,18 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
         Assert.Null(assessment.Levels.Pronunciation);
         Assert.NotEmpty(assessment.Detail!.TopCorrections);
         AssertStored(sessionId, expectedTurns: 9);
+
+        using var db = database.Open();
+        Assert.Equal(
+            5,
+            db.ExecuteScalar<int>(
+                "SELECT COUNT(*) FROM dbo.Turns WHERE SessionId = @sessionId AND Role = 'tutor' AND Model = 'claude-sonnet-5-5' AND InputTokens > 0 AND OutputTokens > 0",
+                new { sessionId }));
+        Assert.Equal(
+            1,
+            db.ExecuteScalar<int>(
+                "SELECT COUNT(*) FROM dbo.Assessments WHERE SessionId = @sessionId AND Model = 'claude-opus-5-5' AND InputTokens > 0 AND OutputTokens > 0",
+                new { sessionId }));
     }
 
     [E2EFact(claude: true, azureSpeech: true)]

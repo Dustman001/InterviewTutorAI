@@ -2,6 +2,9 @@ using System.Globalization;
 using System.Threading.RateLimiting;
 using Anthropic;
 using Azure.Identity;
+using Azure.Monitor.OpenTelemetry.AspNetCore;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
@@ -26,10 +29,21 @@ if (!string.IsNullOrWhiteSpace(keyVaultUri))
     builder.Configuration.AddAzureKeyVault(new Uri(keyVaultUri), new DefaultAzureCredential());
 }
 
+// Traces, metrics and logs to Application Insights, only when it's configured (App Service sets this setting
+// when Application Insights is attached). Locally nothing is exported.
+if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
+{
+    builder.Services.AddOpenTelemetry()
+        .UseAzureMonitor()
+        .WithTracing(tracing => tracing.AddSource(Telemetry.Name))
+        .WithMetrics(metrics => metrics.AddMeter(Telemetry.Name));
+}
+
 builder.Services.Configure<AzureSpeechOptions>(builder.Configuration.GetSection("AzureSpeech"));
 builder.Services.Configure<AnthropicOptions>(builder.Configuration.GetSection("Anthropic"));
 builder.Services.Configure<AssessmentOptions>(builder.Configuration.GetSection("Assessment"));
 builder.Services.Configure<SessionLimitsOptions>(builder.Configuration.GetSection("Sessions"));
+builder.Services.Configure<Dictionary<string, ModelPrice>>(builder.Configuration.GetSection("Pricing"));
 
 // No request needs more than a long spoken turn with its pronunciation results.
 var maxRequestBytes = (builder.Configuration.GetSection("Sessions").Get<SessionLimitsOptions>() ?? new()).MaxRequestBytes;

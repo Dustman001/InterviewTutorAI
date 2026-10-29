@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Anthropic;
@@ -10,6 +11,7 @@ namespace TutorAI.Api.Conversation;
 /// <summary>Token counts for one Claude call, filled in as the stream reports them.</summary>
 public sealed class ClaudeUsage
 {
+    public string Model { get; set; } = "";
     public long InputTokens { get; set; }
     public long OutputTokens { get; set; }
     public long CacheReadTokens { get; set; }
@@ -26,6 +28,9 @@ public sealed class TutorChat(AnthropicClient client, IOptions<AnthropicOptions>
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         usage ??= new ClaudeUsage();
+        usage.Model = options.Value.ConversationModel;
+        using var activity = Telemetry.StartClaudeCall(Telemetry.ChatRoute, usage.Model, session);
+        var timer = Stopwatch.StartNew();
         var scenario = JsonSerializer.Deserialize<Scenario>(session.ScenarioJson, JsonSerializerOptions.Web) ?? new Scenario();
         var parameters = new MessageCreateParams
         {
@@ -52,6 +57,11 @@ public sealed class TutorChat(AnthropicClient client, IOptions<AnthropicOptions>
             {
                 if (text.Text.Length > 0)
                 {
+                    if (!wroteText)
+                    {
+                        Telemetry.TurnFirstTokenMs.Record(timer.Elapsed.TotalMilliseconds, new KeyValuePair<string, object?>("model", usage.Model));
+                    }
+
                     wroteText = true;
                     yield return text.Text;
                 }
@@ -65,6 +75,7 @@ public sealed class TutorChat(AnthropicClient client, IOptions<AnthropicOptions>
             else if (streamEvent.TryPickDelta(out var messageDelta))
             {
                 usage.OutputTokens = messageDelta.Usage.OutputTokens;
+                activity?.SetTag("gen_ai.response.finish_reasons", messageDelta.Delta.StopReason?.ToString());
                 if (messageDelta.Delta.StopReason?.ToString() == "refusal")
                 {
                     refused = true;
@@ -72,6 +83,7 @@ public sealed class TutorChat(AnthropicClient client, IOptions<AnthropicOptions>
             }
         }
 
+        Telemetry.RecordUsage(activity, Telemetry.ChatRoute, usage);
         logger.LogInformation(
             "Tutor turn for session {SessionId}: {InputTokens} input, {CacheReadTokens} cache read, {CacheWriteTokens} cache write, {OutputTokens} output tokens",
             session.Id, usage.InputTokens, usage.CacheReadTokens, usage.CacheWriteTokens, usage.OutputTokens);

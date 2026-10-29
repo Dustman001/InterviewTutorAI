@@ -35,7 +35,21 @@ public static class SessionEndpoints
 
     public static void MapSessionEndpoints(this IEndpointRouteBuilder app)
     {
-        var sessions = app.MapGroup("/api/sessions");
+        var sessions = app.MapGroup("/api/sessions").AddEndpointFilter(async (context, next) =>
+        {
+            var http = context.HttpContext;
+            var logger = http.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(SessionEndpoints));
+            var scope = new Dictionary<string, object?> { ["UserId"] = http.User.FindFirst(TokenService.UserIdClaim)?.Value };
+            if (http.Request.RouteValues.TryGetValue("id", out var id))
+            {
+                scope["SessionId"] = id;
+            }
+
+            using (logger.BeginScope(scope))
+            {
+                return await next(context);
+            }
+        });
 
         sessions.MapPost("/", async (
             CreateSessionRequest request, ClaimsPrincipal user, SessionRepository repository, UserRepository users,
@@ -172,10 +186,11 @@ public static class SessionEndpoints
         http.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
 
         var reply = new StringBuilder();
+        var usage = new ClaudeUsage();
         string? error = null;
         try
         {
-            await foreach (var fragment in chat.StreamReplyAsync(session, turns, ct: ct))
+            await foreach (var fragment in chat.StreamReplyAsync(session, turns, usage, ct))
             {
                 reply.Append(fragment);
                 await WriteEventAsync(http, "delta", new { text = fragment }, ct);
@@ -196,7 +211,19 @@ public static class SessionEndpoints
         {
             var replyText = reply.ToString().Trim();
             tutorTurn = await repository.AddTurnAsync(
-                new TurnRow { SessionId = id, Role = TurnRoles.Tutor, Text = replyText, WordCount = CountWords(replyText) },
+                new TurnRow
+                {
+                    SessionId = id,
+                    Role = TurnRoles.Tutor,
+                    Text = replyText,
+                    WordCount = CountWords(replyText),
+                    // Output stays 0 when the learner interrupted before Claude reported it.
+                    Model = usage.Model,
+                    InputTokens = (int)usage.InputTokens,
+                    OutputTokens = (int)usage.OutputTokens,
+                    CacheReadTokens = (int)usage.CacheReadTokens,
+                    CacheWriteTokens = (int)usage.CacheWriteTokens,
+                },
                 CancellationToken.None);
         }
 

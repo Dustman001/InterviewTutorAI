@@ -120,6 +120,13 @@ export interface CurrentUser {
   sessionsUsed: number;
 }
 
+export interface UsageEstimate {
+  tokens: number;
+  /** From the API's configured prices; unpricedModels lists models it has no price for. */
+  estimatedCostUsd: number;
+  unpricedModels: string[];
+}
+
 export interface AdminUser {
   id: number;
   username: string;
@@ -128,6 +135,8 @@ export interface AdminUser {
   sessionsUsed: number;
   isDisabled: boolean;
   createdAt: string;
+  /** Claude usage over the last 30 days; only in the user list. */
+  usage30Days: UsageEstimate | null;
 }
 
 export interface NewUser {

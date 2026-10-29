@@ -85,12 +85,14 @@ public sealed class SessionRepository(IConfiguration configuration)
         return await db.QuerySingleAsync<TurnRow>(new CommandDefinition(
             """
             INSERT INTO dbo.Turns (SessionId, Seq, Role, Text, DurationMs, WordCount,
-                                   AccuracyScore, FluencyScore, ProsodyScore, PronunciationJson)
+                                   AccuracyScore, FluencyScore, ProsodyScore, PronunciationJson,
+                                   Model, InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens)
             OUTPUT inserted.*
             SELECT @SessionId,
                    ISNULL((SELECT MAX(Seq) FROM dbo.Turns WITH (UPDLOCK, HOLDLOCK) WHERE SessionId = @SessionId), 0) + 1,
                    @Role, @Text, @DurationMs, @WordCount,
-                   @AccuracyScore, @FluencyScore, @ProsodyScore, @PronunciationJson
+                   @AccuracyScore, @FluencyScore, @ProsodyScore, @PronunciationJson,
+                   @Model, @InputTokens, @OutputTokens, @CacheReadTokens, @CacheWriteTokens
             """,
             turn, cancellationToken: ct));
     }
@@ -122,12 +124,40 @@ public sealed class SessionRepository(IConfiguration configuration)
             DELETE FROM dbo.Assessments WHERE SessionId = @SessionId;
 
             INSERT INTO dbo.Assessments (SessionId, Fluency, Grammar, Vocabulary, Interaction, Pronunciation,
-                                         Overall, MetricsJson, DetailJson, Model)
+                                         Overall, MetricsJson, DetailJson, Model,
+                                         InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens)
             OUTPUT inserted.*
             VALUES (@SessionId, @Fluency, @Grammar, @Vocabulary, @Interaction, @Pronunciation,
-                    @Overall, @MetricsJson, @DetailJson, @Model);
+                    @Overall, @MetricsJson, @DetailJson, @Model,
+                    @InputTokens, @OutputTokens, @CacheReadTokens, @CacheWriteTokens);
             """,
             row, cancellationToken: ct));
+    }
+
+    /// <summary>Claude tokens per user and model since <paramref name="since"/>: tutor turns plus assessments.</summary>
+    public async Task<IReadOnlyList<UserModelUsage>> GetUsageByUserAsync(DateTime since, CancellationToken ct)
+    {
+        await using var db = Open();
+        var rows = await db.QueryAsync<UserModelUsage>(new CommandDefinition(
+            """
+            SELECT s.UserId, x.Model,
+                   SUM(CAST(ISNULL(x.InputTokens, 0) AS BIGINT)) AS Input,
+                   SUM(CAST(ISNULL(x.OutputTokens, 0) AS BIGINT)) AS Output,
+                   SUM(CAST(ISNULL(x.CacheReadTokens, 0) AS BIGINT)) AS CacheRead,
+                   SUM(CAST(ISNULL(x.CacheWriteTokens, 0) AS BIGINT)) AS CacheWrite
+            FROM (
+                SELECT SessionId, Model, InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens
+                FROM dbo.Turns WHERE Model IS NOT NULL AND StartedAt >= @since
+                UNION ALL
+                SELECT SessionId, Model, InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens
+                FROM dbo.Assessments WHERE Model IS NOT NULL AND InputTokens IS NOT NULL AND CreatedAt >= @since
+            ) x
+            JOIN dbo.Sessions s ON s.Id = x.SessionId
+            WHERE s.UserId IS NOT NULL
+            GROUP BY s.UserId, x.Model
+            """,
+            new { since }, cancellationToken: ct));
+        return rows.AsList();
     }
 
     /// <summary>
@@ -245,3 +275,5 @@ public sealed class SessionRepository(IConfiguration configuration)
 }
 
 public sealed record GradingClaim(Guid SessionId, int Attempt);
+
+public sealed record UserModelUsage(int UserId, string Model, long Input, long Output, long CacheRead, long CacheWrite);

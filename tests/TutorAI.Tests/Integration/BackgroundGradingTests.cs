@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TutorAI.Api.Assessment;
+using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
 
 namespace TutorAI.Tests.Integration;
@@ -48,6 +49,16 @@ public sealed class BackgroundGradingTests(ThrowawayDatabase database) : IClassF
         Assert.Equal(
             ("Done", 1),
             db.QuerySingle<(string, int)>("SELECT GradingState, GradingAttempts FROM dbo.Sessions WHERE Id = @sessionId", new { sessionId }));
+
+        Assert.Equal(
+            (1200, 800),
+            db.QuerySingle<(int, int)>("SELECT InputTokens, OutputTokens FROM dbo.Assessments WHERE SessionId = @sessionId", new { sessionId }));
+        var admin = (await client.GetFromJsonAsync<List<JsonElement>>("/api/users"))!
+            .Single(u => u.GetProperty("username").GetString() == TestApi.AdminUsername);
+        var usage = admin.GetProperty("usage30Days");
+        Assert.True(usage.GetProperty("tokens").GetInt64() >= 2000);
+        // The fake model has no configured price: counted, not costed.
+        Assert.Contains(FakeGrader.ModelName, usage.GetProperty("unpricedModels").EnumerateArray().Select(m => m.GetString()));
 
         // Ending again returns the stored assessment without grading again.
         var again = await client.PostAsync($"/api/sessions/{sessionId}/end", null);
@@ -249,9 +260,12 @@ internal sealed class FakeGrader : ICefrGrader
     public string Model => ModelName;
 
     public async Task<GradingResult> GradeAsync(
-        SessionRow session, IReadOnlyList<TurnRow> turns, FluencyStats fluency, CancellationToken ct)
+        SessionRow session, IReadOnlyList<TurnRow> turns, FluencyStats fluency, ClaudeUsage usage, CancellationToken ct)
     {
         var call = Interlocked.Increment(ref _calls);
+        usage.Model = ModelName;
+        usage.InputTokens = 1200;
+        usage.OutputTokens = 800;
         if (Delay > TimeSpan.Zero)
         {
             await Task.Delay(Delay, ct);

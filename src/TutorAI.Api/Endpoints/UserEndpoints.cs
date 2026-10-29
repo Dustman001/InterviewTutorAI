@@ -1,12 +1,16 @@
 using System.Security.Claims;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Options;
 using TutorAI.Api.Auth;
+using TutorAI.Api.Data;
 
 namespace TutorAI.Api.Endpoints;
 
+/// <param name="Usage30Days">Claude tokens and estimated cost over the last 30 days. Only set in the user list.</param>
 public sealed record AdminUserDto(
-    int Id, string Username, string Role, int? SessionLimit, int SessionsUsed, bool IsDisabled, DateTime CreatedAt);
+    int Id, string Username, string Role, int? SessionLimit, int SessionsUsed, bool IsDisabled, DateTime CreatedAt,
+    UsageEstimate? Usage30Days = null);
 
 public sealed record CreateUserRequest(string? Username, string? Password, string? Role, int? SessionLimit);
 
@@ -27,9 +31,18 @@ public static partial class UserEndpoints
     {
         var users = app.MapGroup("/api/users").RequireAuthorization(UserRoles.Admin);
 
-        users.MapGet("/", async (UserRepository repository, CancellationToken ct) =>
-            (await repository.ListAsync(ct)).Select(u =>
-                new AdminUserDto(u.Id, u.Username, u.Role, u.SessionLimit, u.SessionsUsed, u.IsDisabled, Utc(u.CreatedAt))));
+        users.MapGet("/", async (
+            UserRepository repository, SessionRepository sessions, IOptions<Dictionary<string, ModelPrice>> pricing,
+            TimeProvider clock, CancellationToken ct) =>
+        {
+            var usage = (await sessions.GetUsageByUserAsync(clock.GetUtcNow().UtcDateTime.AddDays(-30), ct))
+                .ToLookup(u => u.UserId);
+            return (await repository.ListAsync(ct)).Select(u => new AdminUserDto(
+                u.Id, u.Username, u.Role, u.SessionLimit, u.SessionsUsed, u.IsDisabled, Utc(u.CreatedAt),
+                CostEstimator.Estimate(
+                    pricing.Value,
+                    usage[u.Id].Select(m => (m.Model, new TokenTotals(m.Input, m.Output, m.CacheRead, m.CacheWrite))))));
+        });
 
         users.MapPost("/", async (
             CreateUserRequest request, UserRepository repository, IPasswordHasher<UserRow> hasher, CancellationToken ct) =>

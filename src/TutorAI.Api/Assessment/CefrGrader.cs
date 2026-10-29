@@ -3,6 +3,7 @@ using System.Text.Json;
 using Anthropic;
 using Anthropic.Models.Messages;
 using Microsoft.Extensions.Options;
+using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
 
 namespace TutorAI.Api.Assessment;
@@ -25,7 +26,9 @@ public interface ICefrGrader
     /// <summary>The model id stored with the assessment.</summary>
     string Model { get; }
 
-    Task<GradingResult> GradeAsync(SessionRow session, IReadOnlyList<TurnRow> turns, FluencyStats fluency, CancellationToken ct);
+    /// <param name="usage">Filled in with the call's token counts.</param>
+    Task<GradingResult> GradeAsync(
+        SessionRow session, IReadOnlyList<TurnRow> turns, FluencyStats fluency, ClaudeUsage usage, CancellationToken ct);
 }
 
 /// <summary>Grades the learner's side of a transcript against the CEFR spoken-language descriptors using Claude.</summary>
@@ -152,8 +155,10 @@ public sealed class CefrGrader(AnthropicClient client, IOptions<AnthropicOptions
     public string Model => options.Value.GradingModel;
 
     public async Task<GradingResult> GradeAsync(
-        SessionRow session, IReadOnlyList<TurnRow> turns, FluencyStats fluency, CancellationToken ct)
+        SessionRow session, IReadOnlyList<TurnRow> turns, FluencyStats fluency, ClaudeUsage usage, CancellationToken ct)
     {
+        usage.Model = Model;
+        using var activity = Telemetry.StartClaudeCall(Telemetry.GradeRoute, Model, session);
         var response = await client.Messages.Create(
             new MessageCreateParams
             {
@@ -169,7 +174,14 @@ public sealed class CefrGrader(AnthropicClient client, IOptions<AnthropicOptions
             },
             cancellationToken: ct);
 
+        usage.InputTokens = response.Usage.InputTokens;
+        usage.OutputTokens = response.Usage.OutputTokens;
+        usage.CacheReadTokens = response.Usage.CacheReadInputTokens ?? 0;
+        usage.CacheWriteTokens = response.Usage.CacheCreationInputTokens ?? 0;
+        Telemetry.RecordUsage(activity, Telemetry.GradeRoute, usage);
+
         var stopReason = response.StopReason?.ToString();
+        activity?.SetTag("gen_ai.response.finish_reasons", stopReason);
         var text = string.Concat(response.Content.Select(b => b.Value).OfType<TextBlock>().Select(t => t.Text));
         if (string.IsNullOrWhiteSpace(text))
         {

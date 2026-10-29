@@ -78,6 +78,12 @@ public sealed class TurnRow
     public double? FluencyScore { get; set; }
     public double? ProsodyScore { get; set; }
     public string? PronunciationJson { get; set; }
+    /// <summary>Tutor turns: the Claude call that produced the reply.</summary>
+    public string? Model { get; set; }
+    public int? InputTokens { get; set; }
+    public int? OutputTokens { get; set; }
+    public int? CacheReadTokens { get; set; }
+    public int? CacheWriteTokens { get; set; }
 }
 
 public sealed class AssessmentRow
@@ -92,6 +98,10 @@ public sealed class AssessmentRow
     public string MetricsJson { get; set; } = "{}";
     public string DetailJson { get; set; } = "{}";
     public string? Model { get; set; }
+    public int? InputTokens { get; set; }
+    public int? OutputTokens { get; set; }
+    public int? CacheReadTokens { get; set; }
+    public int? CacheWriteTokens { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 

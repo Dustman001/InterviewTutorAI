@@ -162,10 +162,12 @@ public sealed class GradingWorker(
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["SessionId"] = claim.SessionId });
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stop);
         timeout.CancelAfter(TimeSpan.FromSeconds(settings.GradingTimeoutSeconds));
+        var timer = System.Diagnostics.Stopwatch.StartNew();
 
         try
         {
             await assessments.GradeAsync(claim.SessionId, timeout.Token);
+            Telemetry.GradingDurationMs.Record(timer.Elapsed.TotalMilliseconds, new KeyValuePair<string, object?>("outcome", "done"));
             await repository.FinishGradingAttemptAsync(claim, GradingStates.Done, null, null, CancellationToken.None);
             logger.LogInformation("Graded session {SessionId} on attempt {Attempt}", claim.SessionId, claim.Attempt);
         }
@@ -178,6 +180,9 @@ public sealed class GradingWorker(
         {
             var timedOut = ex is OperationCanceledException && timeout.IsCancellationRequested;
             var retry = claim.Attempt < settings.MaxGradingAttempts;
+            Telemetry.GradingDurationMs.Record(timer.Elapsed.TotalMilliseconds, new KeyValuePair<string, object?>("outcome", "failed"));
+            Telemetry.GradingFailures.Add(
+                1, new KeyValuePair<string, object?>("final", !retry), new KeyValuePair<string, object?>("timed_out", timedOut));
             logger.LogError(
                 ex, "Grading attempt {Attempt} of {MaxAttempts} failed for session {SessionId}{Next}",
                 claim.Attempt, settings.MaxGradingAttempts, claim.SessionId, retry ? "; will retry" : "; giving up");

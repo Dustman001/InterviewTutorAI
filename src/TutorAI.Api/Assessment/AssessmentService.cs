@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Options;
+using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
 
 namespace TutorAI.Api.Assessment;
@@ -78,7 +79,8 @@ public sealed class AssessmentService(
         var row = Insufficient(sessionId, metrics);
         if (row is null)
         {
-            var grading = await grader.GradeAsync(session, turns, metrics.Fluency, ct);
+            var usage = new ClaudeUsage();
+            var grading = await grader.GradeAsync(session, turns, metrics.Fluency, usage, ct);
             row = new AssessmentRow
             {
                 SessionId = sessionId,
@@ -92,6 +94,10 @@ public sealed class AssessmentService(
                     : null,
                 DetailJson = JsonSerializer.Serialize(grading, Json),
                 Model = grader.Model,
+                InputTokens = (int)usage.InputTokens,
+                OutputTokens = (int)usage.OutputTokens,
+                CacheReadTokens = (int)usage.CacheReadTokens,
+                CacheWriteTokens = (int)usage.CacheWriteTokens,
             };
             row.Overall = CefrMapper.Median([row.Fluency, row.Grammar, row.Vocabulary, row.Interaction, row.Pronunciation]);
         }

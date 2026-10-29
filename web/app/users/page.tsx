@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { api, users, type AdminUser, type NewUser } from "@/lib/api";
+import { api, users, type AdminUser, type NewUser, type UsageEstimate } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 
 const MIN_PASSWORD = 8;
@@ -157,6 +157,15 @@ function CreateUser({ onCreate }: { onCreate: (user: NewUser) => Promise<boolean
 
 type Run = (action: () => Promise<unknown>, success: string) => Promise<boolean>;
 
+const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+const usd = new Intl.NumberFormat("en", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
+
+/** e.g. "30 days: 1.2M tokens, ~$0.84". */
+function usageText(usage: UsageEstimate) {
+  const cost = usage.unpricedModels.length > 0 ? `≥ ${usd.format(usage.estimatedCostUsd)}` : `~${usd.format(usage.estimatedCostUsd)}`;
+  return `30 days: ${compact.format(usage.tokens)} tokens, ${cost}`;
+}
+
 function UserRow({ user, isMe, run }: { user: AdminUser; isMe: boolean; run: Run }) {
   const [panel, setPanel] = useState<"none" | "password" | "limit" | "delete">("none");
   const [password, setPassword] = useState("");
@@ -188,6 +197,7 @@ function UserRow({ user, isMe, run }: { user: AdminUser; isMe: boolean; run: Run
             ? `${user.sessionsUsed} sessions · no limit`
             : `${user.sessionsUsed} of ${user.sessionLimit} sessions used`}{" "}
           · added {formatDate(user.createdAt)}
+          {user.usage30Days && user.usage30Days.tokens > 0 && <> · {usageText(user.usage30Days)}</>}
         </span>
       </div>
 

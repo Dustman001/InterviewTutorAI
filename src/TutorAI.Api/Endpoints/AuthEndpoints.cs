@@ -17,6 +17,9 @@ public static class AuthEndpoints
     /// <summary>Rate-limit policy for sign-in attempts across all users (see Program.cs).</summary>
     public const string LoginPolicy = "login";
 
+    private static void FailedLogin(string reason) =>
+        Telemetry.LoginsFailed.Add(1, new KeyValuePair<string, object?>("reason", reason));
+
     public static void MapAuthEndpoints(this IEndpointRouteBuilder app)
     {
         var auth = app.MapGroup("/api/auth");
@@ -35,6 +38,7 @@ public static class AuthEndpoints
             var user = await users.GetByUsernameAsync(request.Username.Trim(), ct);
             if (user is null)
             {
+                FailedLogin("unknown_user");
                 return wrong;
             }
 
@@ -42,6 +46,7 @@ public static class AuthEndpoints
             var now = clock.GetUtcNow().UtcDateTime;
             if (user.LockedUntil is { } lockedUntil && DateTime.SpecifyKind(lockedUntil, DateTimeKind.Utc) > now)
             {
+                FailedLogin("locked");
                 return Locked(http, DateTime.SpecifyKind(lockedUntil, DateTimeKind.Utc) - now);
             }
 
@@ -50,6 +55,7 @@ public static class AuthEndpoints
                 var options = auth.Value;
                 await users.RecordFailedLoginAsync(
                     user.Id, now, options.LockoutThreshold, options.LockoutBaseSeconds, options.LockoutMaxSeconds, ct);
+                FailedLogin("password");
                 return wrong;
             }
 
