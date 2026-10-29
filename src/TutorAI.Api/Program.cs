@@ -13,6 +13,7 @@ using TutorAI.Api.Auth;
 using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
 using TutorAI.Api.Endpoints;
+using TutorAI.Api.Health;
 using TutorAI.Api.Speech;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -114,6 +115,7 @@ builder.Services.AddSingleton<AssessmentService>();
 builder.Services.AddSingleton<GradingSignal>();
 builder.Services.AddHostedService<GradingWorker>();
 builder.Services.AddHttpClient<SpeechTokenService>();
+builder.Services.AddSingleton<ReadinessCheck>();
 
 var app = builder.Build();
 
@@ -134,21 +136,17 @@ app.UseAuthorization();
 // After authentication, so turn requests are limited per user.
 app.UseRateLimiter();
 
-app.MapGet("/api/health", async (SessionRepository repository, SpeechTokenService speech, CancellationToken ct) =>
-{
-    bool database;
-    try
-    {
-        database = await repository.PingAsync(ct);
-    }
-    catch (Exception)
-    {
-        database = false;
-    }
+// Liveness, for the App Service health probe (about once a minute). It deliberately touches no dependency:
+// a database query here would keep a serverless database from ever auto-pausing, and restarting the
+// instance wouldn't fix a dependency outage anyway.
+app.MapGet("/api/health", (SpeechTokenService speech) =>
+    Results.Ok(new { status = "ok", speechConfigured = speech.IsConfigured })).AllowAnonymous();
 
-    return Results.Json(
-        new { database, speechConfigured = speech.IsConfigured },
-        statusCode: database ? StatusCodes.Status200OK : StatusCodes.Status503ServiceUnavailable);
+// Readiness: can a session run end to end? Checks the database, Anthropic and Azure Speech, cached for a minute.
+app.MapGet("/api/health/ready", async (ReadinessCheck readiness, CancellationToken ct) =>
+{
+    var result = await readiness.GetAsync(ct);
+    return Results.Json(result, statusCode: result.Ready ? StatusCodes.Status200OK : StatusCodes.Status503ServiceUnavailable);
 }).AllowAnonymous();
 
 app.MapGet("/api/speech/token", async (SpeechTokenService speech, CancellationToken ct) =>

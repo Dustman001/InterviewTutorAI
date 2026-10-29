@@ -92,7 +92,7 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
         Assert.Contains(list.EnumerateArray(), s => s.GetProperty("id").GetGuid() == sessionId);
 
         var health = await client.GetFromJsonAsync<JsonElement>("/api/health");
-        Assert.True(health.GetProperty("database").GetBoolean());
+        Assert.Equal("ok", health.GetProperty("status").GetString());
     }
 
     [E2EFact(azureSpeech: true)]
