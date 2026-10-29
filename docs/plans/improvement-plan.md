@@ -27,8 +27,9 @@ gets the time-up note.
 
 **Design.**
 - New `SessionLimitsOptions` (section `Sessions`):
-  `MaxTurnChars` 2000, `MaxPhrasesPerTurn` 60, `MaxUserTurns` 150, `GraceMinutes` 5,
-  `MaxTurnRequestBytes` 1 MB, `MaxJobDescriptionChars` 8000, `MaxTopicChars` 200.
+  `MaxTurnChars` 4000, `MaxPhrasesPerTurn` 100, `MaxUserTurns` 150, `GraceMinutes` 5,
+  `MaxRequestBytes` 4 MB, `MaxJobDescriptionChars` 8000, `MaxScenarioFieldChars` 200,
+  `TurnsPerMinute` 20 (the values as shipped).
 - `POST /api/sessions`: validate `DurationMinutes` in 5–60 (the UI offers 5–30), and the text-field
   lengths. 400 with a clear message otherwise.
 - `POST /api/sessions/{id}/turns`, before any Claude call:
