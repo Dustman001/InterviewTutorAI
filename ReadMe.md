@@ -295,7 +295,7 @@ bare `CREATE DATABASE` gets a default General Purpose tier that costs far more t
 ```powershell
 az sql server create -n $sqlServer -g $rg -l $loc --admin-user $sqlAdmin --admin-password $sqlPassword
 az sql db create -g $rg -s $sqlServer -n TutorAI --service-objective Basic
-# Or, free (one per subscription; pauses when the monthly free amount is used up). The free amount
+# Or, free (up to 10 per subscription, each with its own monthly free amount; pauses when that is used up). The free amount
 # lasts only if the database auto-pauses when idle, so nothing may query it on a timer.
 # /api/health deliberately doesn't (see step 8).
 # az sql db create -g $rg -s $sqlServer -n TutorAI --edition GeneralPurpose --compute-model Serverless `
