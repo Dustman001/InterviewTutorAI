@@ -19,10 +19,14 @@ test("sign in, hold a typed conversation, end it and see it graded", async ({ pa
   await page.getByLabel("Username").fill(TUTORAI_E2E_USER!);
   await page.getByLabel("Password").fill(TUTORAI_E2E_PASSWORD!);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/$/);
+  // The first request can wait up to a minute while a paused serverless database resumes.
+  await expect(page).toHaveURL(/\/$/, { timeout: 90_000 });
+  // The user bar appears only once the page's script runs. A click before that submits the form natively and
+  // just reloads the page.
+  await expect(page.getByText("Signed in as")).toBeVisible({ timeout: 30_000 });
 
   await page.getByRole("button", { name: "Start session" }).click();
-  await expect(page).toHaveURL(/\/session\/[0-9a-f-]+$/);
+  await expect(page).toHaveURL(/\/session\/[0-9a-f-]+$/, { timeout: 30_000 });
 
   await page.getByRole("button", { name: "Start", exact: true }).click();
   const status = page.locator(".status");
