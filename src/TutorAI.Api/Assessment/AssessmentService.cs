@@ -23,11 +23,11 @@ public sealed record AssessmentResponse(
     DateTime CreatedAt);
 
 /// <summary>The result of ending a session: the stored assessment when there is one, and the grading state.</summary>
-public sealed record EndResult(AssessmentResponse? Assessment, string? GradingState);
+public sealed record EndResult(AssessmentResponse? Assessment, GradingState? GradingState);
 
 public sealed class AssessmentService(
-    SessionRepository repository, ICefrGrader grader, GradingSignal signal, IOptions<AssessmentOptions> options,
-    TimeProvider clock)
+    ISessionRepository repository, IPracticeRepository practiceItems, IUnitOfWorkFactory database, ICefrGrader grader,
+    GradingSignal signal, IOptions<AssessmentOptions> options, TimeProvider clock)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -46,23 +46,23 @@ public sealed class AssessmentService(
 
         await repository.EndSessionAsync(sessionId, ct);
 
-        if (GradingStates.InProgress(session.GradingState))
+        if (session.GradingState is { InProgress: true })
         {
             return new EndResult(null, session.GradingState);
         }
 
         if (!regrade && await repository.GetAssessmentAsync(sessionId, ct) is { } existing)
         {
-            return new EndResult(ToResponse(existing), GradingStates.Done);
+            return new EndResult(ToResponse(existing), GradingState.Done);
         }
 
         var turns = await repository.GetTurnsAsync(sessionId, includePronunciationJson: true, ct);
         var metrics = ComputeMetrics(turns);
         if (Insufficient(sessionId, metrics) is { } shortRow)
         {
-            var saved = await repository.SaveAssessmentAsync(shortRow, ct);
+            var saved = await SaveAsync(shortRow, null, ct);
             await repository.SetGradingDoneAsync(sessionId, ct);
-            return new EndResult(ToResponse(saved), GradingStates.Done);
+            return new EndResult(ToResponse(saved), GradingState.Done);
         }
 
         var state = await repository.QueueGradingAsync(sessionId, ct);
@@ -117,7 +117,21 @@ public sealed class AssessmentService(
             row.Overall = CefrMapper.Median([row.Fluency, row.Grammar, row.Vocabulary, row.Interaction, row.Pronunciation]);
         }
 
-        await repository.SaveAssessmentAsync(row, ct, practice);
+        await SaveAsync(row, practice, ct);
+    }
+
+    /// <summary>Saves the assessment and its practice items together: both or neither.</summary>
+    private async Task<AssessmentRow> SaveAsync(AssessmentRow row, PracticeBatch? practice, CancellationToken ct)
+    {
+        await using var work = await database.BeginAsync(ct);
+        var saved = await repository.SaveAssessmentAsync(row, work, ct);
+        if (practice is not null)
+        {
+            await practiceItems.UpsertAsync(practice, work, ct);
+        }
+
+        await work.CommitAsync(ct);
+        return saved;
     }
 
     /// <summary>The "too short to grade" assessment, or null when the learner spoke enough.</summary>
@@ -145,7 +159,7 @@ public sealed class AssessmentService(
     public static SessionMetrics ComputeMetrics(IReadOnlyList<TurnRow> turns)
     {
         var userTurns = turns
-            .Where(t => t.Role == TurnRoles.User)
+            .Where(t => t.Role == TurnRole.User)
             .Select(t => (t.WordCount, Phrases: AzurePronunciation.ParseTurn(t.PronunciationJson)))
             .ToList();
 

@@ -10,7 +10,7 @@ namespace TutorAI.Api.Auth;
 /// always be recovered from Key Vault.
 /// </summary>
 public sealed class UserSeeder(
-    UserRepository users, IPasswordHasher<UserRow> hasher, IOptions<AuthOptions> options, ILogger<UserSeeder> logger)
+    IUserRepository users, IPasswordHasher<UserRow> hasher, IOptions<AuthOptions> options, ILogger<UserSeeder> logger)
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private bool _done;

@@ -32,7 +32,7 @@ public static partial class UserEndpoints
         var users = app.MapGroup("/api/users").RequireAuthorization(UserRoles.Admin);
 
         users.MapGet("/", async (
-            UserRepository repository, SessionRepository sessions, IOptions<Dictionary<string, ModelPrice>> pricing,
+            IUserRepository repository, ISessionRepository sessions, IOptions<Dictionary<string, ModelPrice>> pricing,
             TimeProvider clock, CancellationToken ct) =>
         {
             var usage = (await sessions.GetUsageByUserAsync(clock.GetUtcNow().UtcDateTime.AddDays(-30), ct))
@@ -45,7 +45,7 @@ public static partial class UserEndpoints
         });
 
         users.MapPost("/", async (
-            CreateUserRequest request, UserRepository repository, IPasswordHasher<UserRow> hasher, CancellationToken ct) =>
+            CreateUserRequest request, IUserRepository repository, IPasswordHasher<UserRow> hasher, CancellationToken ct) =>
         {
             var username = request.Username?.Trim() ?? "";
             if (!UsernamePattern().IsMatch(username))
@@ -85,7 +85,7 @@ public static partial class UserEndpoints
         });
 
         users.MapPut("/{id:int}", async (
-            int id, UpdateUserRequest request, ClaimsPrincipal principal, UserRepository repository, CancellationToken ct) =>
+            int id, UpdateUserRequest request, ClaimsPrincipal principal, IUserRepository repository, CancellationToken ct) =>
         {
             if (await repository.GetByIdAsync(id, ct) is not { } user)
             {
@@ -121,7 +121,7 @@ public static partial class UserEndpoints
         });
 
         users.MapPost("/{id:int}/password", async (
-            int id, SetPasswordRequest request, UserRepository repository, IPasswordHasher<UserRow> hasher, CancellationToken ct) =>
+            int id, SetPasswordRequest request, IUserRepository repository, IPasswordHasher<UserRow> hasher, CancellationToken ct) =>
         {
             if (await repository.GetByIdAsync(id, ct) is not { } user)
             {
@@ -137,7 +137,7 @@ public static partial class UserEndpoints
             return Results.NoContent();
         });
 
-        users.MapPost("/{id:int}/reset-sessions", async (int id, UserRepository repository, CancellationToken ct) =>
+        users.MapPost("/{id:int}/reset-sessions", async (int id, IUserRepository repository, CancellationToken ct) =>
         {
             if (await repository.GetByIdAsync(id, ct) is null)
             {
@@ -148,7 +148,7 @@ public static partial class UserEndpoints
             return Results.Ok(await GetDtoAsync(repository, id, ct));
         });
 
-        users.MapDelete("/{id:int}", async (int id, ClaimsPrincipal principal, UserRepository repository, CancellationToken ct) =>
+        users.MapDelete("/{id:int}", async (int id, ClaimsPrincipal principal, IUserRepository repository, CancellationToken ct) =>
         {
             if (await repository.GetByIdAsync(id, ct) is not { } user)
             {
@@ -182,7 +182,7 @@ public static partial class UserEndpoints
 
     private static IResult Error(string message) => Results.BadRequest(new { error = message });
 
-    private static async Task<AdminUserDto> GetDtoAsync(UserRepository repository, int id, CancellationToken ct)
+    private static async Task<AdminUserDto> GetDtoAsync(IUserRepository repository, int id, CancellationToken ct)
     {
         var row = (await repository.ListAsync(ct)).Single(u => u.Id == id);
         return new AdminUserDto(row.Id, row.Username, row.Role, row.SessionLimit, row.SessionsUsed, row.IsDisabled, Utc(row.CreatedAt));

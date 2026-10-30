@@ -70,7 +70,7 @@ public class SessionRulesTests
     {
         var session = Session(minutes: 10);
         var limits = new SessionLimitsOptions { MaxUserTurns = 2 };
-        TurnRow[] turns = [Turn(TurnRoles.Tutor, 0), Turn(TurnRoles.User, 1), Turn(TurnRoles.Tutor, 1), Turn(TurnRoles.User, 2)];
+        TurnRow[] turns = [Turn(TurnRole.Tutor, 0), Turn(TurnRole.User, 1), Turn(TurnRole.Tutor, 1), Turn(TurnRole.User, 2)];
 
         var refused = SessionRules.CheckTurn(session, Scenario(session), turns, "Third.", 0, Start.AddMinutes(3), limits);
 
@@ -84,8 +84,8 @@ public class SessionRulesTests
         var session = Session(minutes: 10);
         TurnRow[] turns =
         [
-            Turn(TurnRoles.Tutor, 0), Turn(TurnRoles.User, 9), Turn(TurnRoles.Tutor, 9),
-            Turn(TurnRoles.User, 10), Turn(TurnRoles.Tutor, 11), Turn(TurnRoles.User, 12),
+            Turn(TurnRole.Tutor, 0), Turn(TurnRole.User, 9), Turn(TurnRole.Tutor, 9),
+            Turn(TurnRole.User, 10), Turn(TurnRole.Tutor, 11), Turn(TurnRole.User, 12),
         ];
 
         var messages = TutorChat.BuildMessages(session, Scenario(session), turns);
@@ -104,10 +104,10 @@ public class SessionRulesTests
     public void Earlier_turns_render_identically_on_later_requests_so_the_cache_stays_valid()
     {
         var session = Session(minutes: 10);
-        List<TurnRow> turns = [Turn(TurnRoles.Tutor, 0), Turn(TurnRoles.User, 11)];
+        List<TurnRow> turns = [Turn(TurnRole.Tutor, 0), Turn(TurnRole.User, 11)];
 
         var before = TutorChat.BuildMessages(session, Scenario(session), turns).Select(Text).ToList();
-        turns.AddRange([Turn(TurnRoles.Tutor, 11), Turn(TurnRoles.User, 12)]);
+        turns.AddRange([Turn(TurnRole.Tutor, 11), Turn(TurnRole.User, 12)]);
         var after = TutorChat.BuildMessages(session, Scenario(session), turns).Select(Text).ToList();
 
         Assert.Equal(before, after.Take(before.Count));
@@ -119,7 +119,7 @@ public class SessionRulesTests
     private static SessionRow Session(int minutes) => new()
     {
         Id = Guid.NewGuid(),
-        Mode = SessionModes.Conversation,
+        Mode = SessionMode.Conversation,
         ScenarioJson = JsonSerializer.Serialize(new Scenario(Topic: "Travel", DurationMinutes: minutes), JsonSerializerOptions.Web),
         // Stored rows come back from SQL Server without a kind.
         StartedAt = DateTime.SpecifyKind(Start, DateTimeKind.Unspecified),
@@ -128,7 +128,7 @@ public class SessionRulesTests
     private static Scenario Scenario(SessionRow session) =>
         JsonSerializer.Deserialize<Scenario>(session.ScenarioJson, JsonSerializerOptions.Web)!;
 
-    private static TurnRow Turn(string role, int minute) => new()
+    private static TurnRow Turn(TurnRole role, int minute) => new()
     {
         Role = role,
         Text = $"{role} at minute {minute}",

@@ -75,7 +75,7 @@ public sealed class CalibrationTests(ITestOutputHelper output)
         var session = new SessionRow
         {
             Id = Guid.NewGuid(),
-            Mode = sample.Mode,
+            Mode = StringValue.Parse<SessionMode>(sample.Mode),
             ScenarioJson = sample.Scenario?.GetRawText() ?? "{}",
             Status = SessionStatus.Ended,
         };
@@ -83,14 +83,14 @@ public sealed class CalibrationTests(ITestOutputHelper output)
             .Select((t, i) => new TurnRow
             {
                 Seq = i + 1,
-                Role = t.Role == "learner" ? TurnRoles.User : TurnRoles.Tutor,
+                Role = t.Role == "learner" ? TurnRole.User : TurnRole.Tutor,
                 Text = t.Text,
                 WordCount = t.Text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length,
             })
             .ToList();
         // Without measured timings the grader is told they're missing, as for a typed session.
         var fluency = sample.Fluency ?? FluencyMetrics.Compute(
-            turns.Where(t => t.Role == TurnRoles.User).Select(t => (t.WordCount, (IReadOnlyList<AssessedPhrase>)[])));
+            turns.Where(t => t.Role == TurnRole.User).Select(t => (t.WordCount, (IReadOnlyList<AssessedPhrase>)[])));
         var callUsage = new ClaudeUsage();
         usage.Add(callUsage);
         return grader.GradeAsync(session, turns, fluency, callUsage, ct);

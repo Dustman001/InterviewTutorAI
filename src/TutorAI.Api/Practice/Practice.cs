@@ -1,19 +1,28 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using TutorAI.Api.Assessment;
+using TutorAI.Api.Data;
 
 namespace TutorAI.Api.Practice;
 
-public static class PracticeKinds
+[JsonConverter(typeof(StringValueJsonConverter<PracticeKind>))]
+public readonly record struct PracticeKind : IStringValue<PracticeKind>
 {
     /// <summary>A corrected sentence from the grader's top corrections.</summary>
-    public const string Correction = "correction";
+    public static readonly PracticeKind Correction = new("correction");
 
     /// <summary>A word the learner mispronounced.</summary>
-    public const string Word = "word";
+    public static readonly PracticeKind Word = new("word");
+
+    private PracticeKind(string value) => Value = value;
+
+    public string Value { get; }
+    public static IReadOnlyList<PracticeKind> All { get; } = [Correction, Word];
+    public override string ToString() => Value;
 }
 
 /// <summary>An item to add (or merge) when a session is graded.</summary>
-public sealed record PracticeSeed(string Kind, string Target, string TargetKey, string? Original, string? Explanation);
+public sealed record PracticeSeed(PracticeKind Kind, string Target, string TargetKey, string? Original, string? Explanation);
 
 /// <summary>The items one graded session adds, saved in the same transaction as its assessment.</summary>
 public sealed record PracticeBatch(int UserId, Guid SessionId, string? Locale, DateTime Now, IReadOnlyList<PracticeSeed> Items);
@@ -23,7 +32,7 @@ public sealed class PracticeItemRow
     public long Id { get; set; }
     public int UserId { get; set; }
     public Guid? SessionId { get; set; }
-    public string Kind { get; set; } = "";
+    public PracticeKind Kind { get; set; }
     public string Target { get; set; } = "";
     public string TargetKey { get; set; } = "";
     public string? Original { get; set; }
@@ -87,7 +96,7 @@ public static class PracticeSeeds
             }
 
             seeds.Add(new PracticeSeed(
-                PracticeKinds.Correction, target, Key(target), Truncate(correction.Original?.Trim(), 400),
+                PracticeKind.Correction, target, Key(target), Truncate(correction.Original?.Trim(), 400),
                 Truncate(correction.Explanation?.Trim(), 1000)));
         }
 
@@ -100,7 +109,7 @@ public static class PracticeSeeds
             }
 
             seeds.Add(new PracticeSeed(
-                PracticeKinds.Word, target, Key(target), null, $"Scored {word.Score:0} out of 100 in your session."));
+                PracticeKind.Word, target, Key(target), null, $"Scored {word.Score:0} out of 100 in your session."));
         }
 
         return [.. seeds.DistinctBy(s => (s.Kind, s.TargetKey))];

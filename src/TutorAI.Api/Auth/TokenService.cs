@@ -78,7 +78,7 @@ public static class TokenRevocation
             return;
         }
 
-        var users = context.HttpContext.RequestServices.GetRequiredService<UserRepository>();
+        var users = context.HttpContext.RequestServices.GetRequiredService<IUserRepository>();
         var user = await users.GetByIdAsync(userId, context.HttpContext.RequestAborted);
         if (user is null || user.IsDisabled || user.TokenVersion != version)
         {

@@ -25,8 +25,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Every timestamp column is datetime2. Dapper's default DateTime parameter type is datetime, which rounds to
 // 1/300 s and makes exact comparisons and cursors unreliable.
-Dapper.SqlMapper.AddTypeMap(typeof(DateTime), System.Data.DbType.DateTime2);
-Dapper.SqlMapper.AddTypeMap(typeof(DateTime?), System.Data.DbType.DateTime2);
+SqlDatabase.ConfigureDapper();
 
 // In Azure, secrets come from Key Vault. Secret names use "--" for ":" (e.g. Anthropic--ApiKey).
 // Locally, leave KeyVault:Uri empty and use dotnet user-secrets instead.
@@ -123,15 +122,18 @@ builder.Services.AddSingleton(_ =>
     var apiKey = builder.Configuration["Anthropic:ApiKey"];
     return string.IsNullOrWhiteSpace(apiKey) ? new AnthropicClient() : new AnthropicClient { ApiKey = apiKey };
 });
-builder.Services.AddSingleton<SessionRepository>();
-builder.Services.AddSingleton<UserRepository>();
-builder.Services.AddSingleton<PracticeRepository>();
+builder.Services.AddSingleton<SqlDatabase>();
+builder.Services.AddSingleton<IUnitOfWorkFactory>(sp => sp.GetRequiredService<SqlDatabase>());
+builder.Services.AddSingleton<ISessionRepository, SessionRepository>();
+builder.Services.AddSingleton<IUserRepository, UserRepository>();
+builder.Services.AddSingleton<IPracticeRepository, PracticeRepository>();
 builder.Services.AddSingleton<IPasswordHasher<UserRow>, PasswordHasher<UserRow>>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<TokenService>();
 builder.Services.AddSingleton<UserSeeder>();
 builder.Services.AddHostedService<UserSeederStartup>();
-builder.Services.AddSingleton<TutorChat>();
+builder.Services.AddSingleton<ITutorChat, TutorChat>();
+builder.Services.AddSingleton<TurnService>();
 builder.Services.AddSingleton<ICefrGrader, CefrGrader>();
 builder.Services.AddSingleton<AssessmentService>();
 builder.Services.AddSingleton<GradingSignal>();
@@ -179,7 +181,7 @@ app.MapGet("/api/speech/accents", (IOptions<AzureSpeechOptions> options) =>
 // accent (a locale, as practice items carry), that accent's. An accent no longer in the allowlist falls back
 // to the default, as it does for sessions.
 app.MapGet("/api/speech/token", async (
-    Guid? sessionId, string? accent, ClaimsPrincipal user, SessionRepository sessions, IOptions<AzureSpeechOptions> options,
+    Guid? sessionId, string? accent, ClaimsPrincipal user, ISessionRepository sessions, IOptions<AzureSpeechOptions> options,
     SpeechTokenService speech, CancellationToken ct) =>
 {
     Accent? chosen = null;

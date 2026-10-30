@@ -17,7 +17,7 @@ public sealed record Readiness(
 /// Speech (issuing a token). The result is cached so frequent probes can't generate traffic or wake the database.
 /// </summary>
 public sealed class ReadinessCheck(
-    SessionRepository repository,
+    ISessionRepository repository,
     AnthropicClient anthropic,
     IOptions<AnthropicOptions> anthropicOptions,
     SpeechTokenService speech,

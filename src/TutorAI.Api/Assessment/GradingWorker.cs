@@ -46,7 +46,7 @@ public sealed class GradingSignal
 /// not poll while idle, so a serverless database can still pause.
 /// </summary>
 public sealed class GradingWorker(
-    SessionRepository repository,
+    ISessionRepository repository,
     AssessmentService assessments,
     GradingSignal signal,
     IOptions<AssessmentOptions> options,
@@ -168,7 +168,7 @@ public sealed class GradingWorker(
         {
             await assessments.GradeAsync(claim.SessionId, timeout.Token);
             Telemetry.GradingDurationMs.Record(timer.Elapsed.TotalMilliseconds, new KeyValuePair<string, object?>("outcome", "done"));
-            await repository.FinishGradingAttemptAsync(claim, GradingStates.Done, null, null, CancellationToken.None);
+            await repository.FinishGradingAttemptAsync(claim, GradingState.Done, null, null, CancellationToken.None);
             logger.LogInformation("Graded session {SessionId} on attempt {Attempt}", claim.SessionId, claim.Attempt);
         }
         catch (Exception) when (stop.IsCancellationRequested)
@@ -191,7 +191,7 @@ public sealed class GradingWorker(
             {
                 await TryAsync(
                     () => repository.FinishGradingAttemptAsync(
-                        claim, GradingStates.Pending, null, RetryDelay(settings, claim.Attempt), CancellationToken.None),
+                        claim, GradingState.Pending, null, RetryDelay(settings, claim.Attempt), CancellationToken.None),
                     claim);
             }
             else
@@ -200,7 +200,7 @@ public sealed class GradingWorker(
                     ? $"Scoring took longer than {settings.GradingTimeoutSeconds} seconds, {claim.Attempt} times. Try again later."
                     : $"Scoring failed after {claim.Attempt} attempts. Try again later.";
                 await TryAsync(
-                    () => repository.FinishGradingAttemptAsync(claim, GradingStates.Failed, error, null, CancellationToken.None),
+                    () => repository.FinishGradingAttemptAsync(claim, GradingState.Failed, error, null, CancellationToken.None),
                     claim);
             }
         }

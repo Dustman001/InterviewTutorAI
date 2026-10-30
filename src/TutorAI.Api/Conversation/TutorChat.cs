@@ -19,9 +19,19 @@ public sealed class ClaudeUsage
     public long CacheWriteTokens { get; set; }
 }
 
-/// <summary>Produces the tutor's next spoken turn with Claude, streamed as text fragments.</summary>
+/// <summary>Produces the tutor's next spoken turn, streamed as text fragments.</summary>
+public interface ITutorChat
+{
+    /// <param name="turns">The session's stored turns, the learner's latest last.</param>
+    /// <param name="usage">Filled in with the call's model and token counts as the stream reports them.</param>
+    IAsyncEnumerable<string> StreamReplyAsync(
+        SessionRow session, IReadOnlyList<TurnRow> turns, ClaudeUsage? usage = null, CancellationToken ct = default);
+}
+
+/// <summary>The tutor, played by Claude.</summary>
 public sealed class TutorChat(
     AnthropicClient client, IOptions<AnthropicOptions> options, IOptions<AzureSpeechOptions> speech, ILogger<TutorChat> logger)
+    : ITutorChat
 {
     private const string RefusalFallback = "Sorry, I can't continue with that. Let's talk about something else. What would you like to discuss?";
 
@@ -112,7 +122,7 @@ public sealed class TutorChat(
         List<MessageParam> messages = [new() { Role = Role.User, Content = ScenarioPrompts.Kickoff }];
         foreach (var turn in turns)
         {
-            var isUser = turn.Role == TurnRoles.User;
+            var isUser = turn.Role == TurnRole.User;
             var lateUserTurn = isUser && DateTime.SpecifyKind(turn.StartedAt, DateTimeKind.Utc) >= plannedEnd;
             messages.Add(new()
             {

@@ -2,8 +2,11 @@ using TutorAI.Api.Data;
 
 namespace TutorAI.Api.Conversation;
 
-/// <summary>Why a turn was refused. <see cref="Code"/> lets the web app react, e.g. end the session on <c>time_up</c>.</summary>
-public sealed record TurnRejection(int StatusCode, string Code, string Error);
+/// <summary>
+/// Why a turn was refused. <see cref="Code"/> lets the web app react, e.g. end the session on <c>time_up</c>;
+/// null when there is nothing for it to act on.
+/// </summary>
+public sealed record TurnRejection(int StatusCode, string? Code, string Error);
 
 /// <summary>The bounds from <see cref="SessionLimitsOptions"/>, checked before any Claude call.</summary>
 public static class SessionRules
@@ -61,7 +64,7 @@ public static class SessionRules
             return new(StatusCodes.Status409Conflict, TimeUp, "The time for this session is up.");
         }
 
-        if (text is not null && turns.Count(t => t.Role == TurnRoles.User) >= limits.MaxUserTurns)
+        if (text is not null && turns.Count(t => t.Role == TurnRole.User) >= limits.MaxUserTurns)
         {
             return new(StatusCodes.Status409Conflict, TurnLimit, $"This session has reached its limit of {limits.MaxUserTurns} turns.");
         }

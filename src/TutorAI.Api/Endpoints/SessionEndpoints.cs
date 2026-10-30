@@ -1,6 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Security.Claims;
-using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Options;
@@ -12,21 +11,28 @@ using TutorAI.Api.Speech;
 
 namespace TutorAI.Api.Endpoints;
 
-public sealed record SessionDto(Guid Id, string Mode, Scenario Scenario, DateTime StartedAt, DateTime? EndedAt, string Status);
+/// <param name="Mode">Conversation or Interview.</param>
+public sealed record CreateSessionRequest(string Mode, Scenario? Scenario);
+
+/// <param name="Phrases">Raw Azure Speech detailed-result JSON, one object per recognized phrase of the turn.</param>
+public sealed record TurnRequest(string? Text, int? DurationMs, JsonElement[]? Phrases);
+
+public sealed record SessionDto(
+    Guid Id, SessionMode Mode, Scenario Scenario, DateTime StartedAt, DateTime? EndedAt, SessionStatus Status);
 
 public sealed record SessionSummaryDto(
-    Guid Id, string Mode, Scenario Scenario, DateTime StartedAt, DateTime? EndedAt, string Status, AssessmentLevels? Levels,
-    string? GradingState);
+    Guid Id, SessionMode Mode, Scenario Scenario, DateTime StartedAt, DateTime? EndedAt, SessionStatus Status,
+    AssessmentLevels? Levels, GradingState? GradingState);
 
 /// <param name="NextCursor">Pass as <c>before</c> to get the next page; null on the last page.</param>
 public sealed record SessionPageDto(IReadOnlyList<SessionSummaryDto> Items, string? NextCursor);
 
 public sealed record TurnDto(
-    long Id, int Seq, string Role, string Text, DateTime StartedAt, int? DurationMs, int WordCount,
+    long Id, int Seq, TurnRole Role, string Text, DateTime StartedAt, int? DurationMs, int WordCount,
     double? AccuracyScore, double? FluencyScore, double? ProsodyScore);
 
 /// <param name="State">Pending, Running, Done or Failed; null when the session was never queued for grading.</param>
-public sealed record GradingDto(string? State, string? Error);
+public sealed record GradingDto(GradingState? State, string? Error);
 
 public sealed record SessionDetailDto(
     SessionDto Session, IReadOnlyList<TurnDto> Turns, AssessmentResponse? Assessment, GradingDto Grading);
@@ -60,12 +66,12 @@ public static class SessionEndpoints
         });
 
         sessions.MapPost("/", async (
-            CreateSessionRequest request, ClaimsPrincipal user, SessionRepository repository, UserRepository users,
+            CreateSessionRequest request, ClaimsPrincipal user, ISessionRepository repository, IUserRepository users,
             IOptions<SessionLimitsOptions> limits, IOptions<AzureSpeechOptions> speech, CancellationToken ct) =>
         {
-            if (!SessionModes.IsValid(request.Mode))
+            if (!StringValue.TryParse<SessionMode>(request.Mode, out var mode))
             {
-                return Results.BadRequest(new { error = $"Mode must be '{SessionModes.Conversation}' or '{SessionModes.Interview}'." });
+                return Results.BadRequest(new { error = $"Mode must be {StringValue.Describe<SessionMode>()}." });
             }
 
             var scenario = request.Scenario ?? new Scenario();
@@ -84,7 +90,7 @@ public static class SessionEndpoints
 
                 scenario = scenario with { Accent = accent.Id };
             }
-            var row = await repository.CreateSessionAsync(user.UserId(), request.Mode, JsonSerializer.Serialize(scenario, Json), ct);
+            var row = await repository.CreateSessionAsync(user.UserId(), mode, JsonSerializer.Serialize(scenario, Json), ct);
             if (row is null)
             {
                 return await users.GetByIdAsync(user.UserId(), ct) is { SessionLimit: { } limit }
@@ -98,7 +104,7 @@ public static class SessionEndpoints
         });
 
         sessions.MapGet("/", async (
-            ClaimsPrincipal user, SessionRepository repository, int? limit, string? before, CancellationToken ct) =>
+            ClaimsPrincipal user, ISessionRepository repository, int? limit, string? before, CancellationToken ct) =>
         {
             var cursor = SessionCursor.TryDecode(before);
             if (before is not null && cursor is null)
@@ -121,7 +127,7 @@ public static class SessionEndpoints
         });
 
         sessions.MapGet("/{id:guid}", async (
-            Guid id, ClaimsPrincipal user, SessionRepository repository, AssessmentService assessments, CancellationToken ct) =>
+            Guid id, ClaimsPrincipal user, ISessionRepository repository, AssessmentService assessments, CancellationToken ct) =>
         {
             var session = await repository.GetSessionAsync(id, ct);
             if (!CanAccess(user, session))
@@ -132,7 +138,7 @@ public static class SessionEndpoints
             var turns = await repository.GetTurnsAsync(id, includePronunciationJson: false, ct);
             return Results.Ok(new SessionDetailDto(
                 ToDto(session), [.. turns.Select(ToDto)], await assessments.GetAsync(id, ct),
-                new GradingDto(session.GradingState, session.GradingState == GradingStates.Failed ? session.GradingError : null)));
+                new GradingDto(session.GradingState, session.GradingState == GradingState.Failed ? session.GradingError : null)));
         });
 
         sessions.MapPost("/{id:guid}/turns", PostTurnAsync).RequireRateLimiting(TurnsPolicy);
@@ -140,7 +146,7 @@ public static class SessionEndpoints
         // 200 with the assessment when it's ready (stored already, or too short to grade); otherwise 202 with
         // the grading state, and the client polls GET /api/sessions/{id} until grading is Done or Failed.
         sessions.MapPost("/{id:guid}/end", async (
-            Guid id, bool? regrade, ClaimsPrincipal user, SessionRepository repository, AssessmentService assessments,
+            Guid id, bool? regrade, ClaimsPrincipal user, ISessionRepository repository, AssessmentService assessments,
             CancellationToken ct) =>
         {
             if (!CanAccess(user, await repository.GetSessionAsync(id, ct)))
@@ -163,8 +169,7 @@ public static class SessionEndpoints
     /// A request without text is only valid as the first call of a session and yields the tutor's opening line.
     /// </summary>
     private static async Task<IResult> PostTurnAsync(
-        Guid id, TurnRequest request, HttpContext http, SessionRepository repository, TutorChat chat,
-        IOptions<SessionLimitsOptions> limits, TimeProvider clock, ILoggerFactory loggerFactory, CancellationToken ct)
+        Guid id, TurnRequest request, HttpContext http, ISessionRepository repository, TurnService turns, CancellationToken ct)
     {
         var session = await repository.GetSessionAsync(id, ct);
         if (!CanAccess(http.User, session))
@@ -172,57 +177,12 @@ public static class SessionEndpoints
             return Results.NotFound();
         }
 
-        if (session.Status != SessionStatus.Active)
+        var start = await turns.StartAsync(session, new LearnerTurn(request.Text, request.DurationMs, request.Phrases), ct);
+        if (start.Rejection is { } rejection)
         {
-            return Results.Conflict(new { error = "The session has ended." });
-        }
-
-        var turns = (await repository.GetTurnsAsync(id, includePronunciationJson: false, ct)).ToList();
-        var text = request.Text?.Trim();
-        if (SessionRules.CheckTurn(
-                session, ParseScenario(session.ScenarioJson), turns, string.IsNullOrEmpty(text) ? null : text,
-                request.Phrases?.Length ?? 0, clock.GetUtcNow().UtcDateTime, limits.Value) is { } rejection)
-        {
-            return Results.Json(new { error = rejection.Error, code = rejection.Code }, statusCode: rejection.StatusCode);
-        }
-
-        if (string.IsNullOrEmpty(text))
-        {
-            if (turns.Count > 0)
-            {
-                return Results.BadRequest(new { error = "Text is required once the session has started." });
-            }
-        }
-        else
-        {
-            var phrases = AzurePronunciation.ParseTurn(request.Phrases);
-            // Implausible scores are dropped, not refused: the conversation goes on, the turn just isn't scored.
-            var rejected = TurnScoreCheck.Problem(text, phrases, request.DurationMs);
-            if (rejected is not null)
-            {
-                loggerFactory.CreateLogger(typeof(SessionEndpoints)).LogWarning(
-                    "Dropped the speech scores of a turn in session {SessionId}: {Reason}", id, rejected);
-                Telemetry.ScoresRejected.Add(1);
-                phrases = [];
-            }
-
-            turns.Add(await repository.AddTurnAsync(
-                new TurnRow
-                {
-                    SessionId = id,
-                    Role = TurnRoles.User,
-                    Text = text,
-                    DurationMs = request.DurationMs,
-                    WordCount = CountWords(text),
-                    AccuracyScore = AzurePronunciation.WeightedMean(phrases, p => p.Accuracy),
-                    FluencyScore = AzurePronunciation.WeightedMean(phrases, p => p.Fluency),
-                    ProsodyScore = AzurePronunciation.WeightedMean(phrases, p => p.Prosody),
-                    PronunciationJson = rejected is null && request.Phrases is { Length: > 0 }
-                        ? JsonSerializer.Serialize(request.Phrases)
-                        : null,
-                    ScoresRejected = rejected,
-                },
-                ct));
+            return Results.Json(
+                rejection.Code is null ? (object)new { error = rejection.Error } : new { error = rejection.Error, code = rejection.Code },
+                statusCode: rejection.StatusCode);
         }
 
         http.Response.ContentType = "text/event-stream";
@@ -230,57 +190,18 @@ public static class SessionEndpoints
         http.Response.Headers["X-Accel-Buffering"] = "no";
         http.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
 
-        var reply = new StringBuilder();
-        var usage = new ClaudeUsage();
-        string? error = null;
-        try
-        {
-            await foreach (var fragment in chat.StreamReplyAsync(session, turns, usage, ct))
-            {
-                reply.Append(fragment);
-                await WriteEventAsync(http, "delta", new { text = fragment }, ct);
-            }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // The learner interrupted or left; keep whatever was already said.
-        }
-        catch (Exception ex)
-        {
-            loggerFactory.CreateLogger(typeof(SessionEndpoints)).LogError(ex, "Tutor reply failed for session {SessionId}", id);
-            error = "The tutor could not reply. Check the API logs and your Anthropic credentials.";
-        }
-
-        TurnRow? tutorTurn = null;
-        if (reply.Length > 0)
-        {
-            var replyText = reply.ToString().Trim();
-            tutorTurn = await repository.AddTurnAsync(
-                new TurnRow
-                {
-                    SessionId = id,
-                    Role = TurnRoles.Tutor,
-                    Text = replyText,
-                    WordCount = CountWords(replyText),
-                    // Output stays 0 when the learner interrupted before Claude reported it.
-                    Model = usage.Model,
-                    InputTokens = (int)usage.InputTokens,
-                    OutputTokens = (int)usage.OutputTokens,
-                    CacheReadTokens = (int)usage.CacheReadTokens,
-                    CacheWriteTokens = (int)usage.CacheWriteTokens,
-                },
-                CancellationToken.None);
-        }
+        var reply = await turns.ReplyAsync(
+            session, start.Turns, (text, token) => WriteEventAsync(http, "delta", new { text }, token), ct);
 
         if (!ct.IsCancellationRequested)
         {
-            if (error is not null)
+            if (reply.Error is not null)
             {
-                await WriteEventAsync(http, "error", new { message = error }, ct);
+                await WriteEventAsync(http, "error", new { message = reply.Error }, ct);
             }
             else
             {
-                await WriteEventAsync(http, "done", new { turnId = tutorTurn?.Id, text = tutorTurn?.Text ?? "" }, ct);
+                await WriteEventAsync(http, "done", new { turnId = reply.Turn?.Id, text = reply.Turn?.Text ?? "" }, ct);
             }
         }
 
@@ -296,9 +217,6 @@ public static class SessionEndpoints
     /// <summary>Users reach only their own sessions; admins reach all. Others get 404, not 403, so ids are not confirmed.</summary>
     private static bool CanAccess(ClaimsPrincipal user, [NotNullWhen(true)] SessionRow? session) =>
         session is not null && (user.IsAdmin() || session.UserId == user.UserId());
-
-    internal static int CountWords(string text) =>
-        text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 
     private static SessionDto ToDto(SessionRow row) =>
         new(row.Id, row.Mode, ParseScenario(row.ScenarioJson), Utc(row.StartedAt), Utc(row.EndedAt), row.Status);
