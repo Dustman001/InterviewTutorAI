@@ -1,0 +1,47 @@
+{
+  "id": "multiple-weak-areas",
+  "description": "Grammar and vocabulary both weak, with several corrections.",
+  "jobDescription": "Logistics Coordinator. Schedule deliveries, track shipments, negotiate with carriers and solve problems when deliveries are late.",
+  "role": "Logistics coordinator",
+  "seniority": null,
+  "learner": {
+    "sessions": [
+      {
+        "daysAgo": 2,
+        "overall": "A2+",
+        "advice": "Use the present perfect for experience, and more precise verbs.",
+        "interaction": "B1",
+        "grammar": "A2",
+        "corrections": [
+          [
+            "I am doing this job since 2020",
+            "I have been doing this job since 2020"
+          ],
+          [
+            "I make the problem better",
+            "I solved the problem"
+          ],
+          [
+            "the truck was late two hours",
+            "the truck was two hours late"
+          ]
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "calls": [
+      "get_weak_areas",
+      "plan_questions",
+      "add_practice_items",
+      "schedule_drill"
+    ],
+    "questionsMin": 3,
+    "questionsMax": 8,
+    "phrasesMin": 3,
+    "drill": true,
+    "questionsMention": [
+      "deliver|shipment|carrier|late"
+    ]
+  }
+}

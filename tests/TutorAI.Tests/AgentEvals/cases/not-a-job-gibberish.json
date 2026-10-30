@@ -1,0 +1,12 @@
+{
+  "id": "not-a-job-gibberish",
+  "description": "Gibberish: write nothing.",
+  "jobDescription": "asdf qwer zxcv uiop hjkl bnm asdf qwer zxcv uiop hjkl bnm lorem ipsum dolor",
+  "role": null,
+  "seniority": null,
+  "learner": null,
+  "expect": {
+    "noWrites": true,
+    "drill": false
+  }
+}

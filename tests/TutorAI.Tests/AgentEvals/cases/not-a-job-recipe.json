@@ -1,0 +1,41 @@
+{
+  "id": "not-a-job-recipe",
+  "description": "Not a job description: write nothing.",
+  "jobDescription": "Ingredients: 200 g flour, 2 eggs, 300 ml milk, a pinch of salt. Whisk together, rest for 30 minutes, then fry thin pancakes in a hot buttered pan.",
+  "role": null,
+  "seniority": null,
+  "learner": {
+    "sessions": [
+      {
+        "daysAgo": 3,
+        "overall": "B1",
+        "advice": "Keep the conversation going: ask a follow-up question and develop answers with an example.",
+        "interaction": "A2+",
+        "grammar": "B1",
+        "corrections": [
+          [
+            "I am work here since two years",
+            "I have worked here for two years"
+          ]
+        ]
+      },
+      {
+        "daysAgo": 10,
+        "overall": "B1",
+        "advice": "Use the past simple consistently for finished actions.",
+        "interaction": "B1",
+        "grammar": "A2+",
+        "corrections": [
+          [
+            "yesterday we go to the client",
+            "yesterday we went to the client"
+          ]
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "noWrites": true,
+    "drill": false
+  }
+}

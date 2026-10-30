@@ -96,9 +96,25 @@ internal sealed class InMemorySessionRepository : ISessionRepository
     }
 
     public Task<bool> PingAsync(CancellationToken ct) => throw new NotSupportedException();
-    public Task<SessionRow?> CreateSessionAsync(int userId, SessionMode mode, string scenarioJson, CancellationToken ct) => throw new NotSupportedException();
+    public Task<SessionRow?> CreateSessionAsync(int userId, SessionMode mode, string scenarioJson, CancellationToken ct) =>
+        Task.FromResult<SessionRow?>(Add(new SessionRow
+        {
+            Id = Guid.NewGuid(), UserId = userId, Mode = mode, ScenarioJson = scenarioJson, StartedAt = DateTime.UtcNow, Status = SessionStatus.Active,
+        }));
     public Task<IReadOnlyList<SessionListRow>> ListSessionsAsync(int? userId, SessionCursor? before, int limit, CancellationToken ct) => throw new NotSupportedException();
-    public Task<IReadOnlyList<ProgressRow>> GetProgressAsync(int userId, SessionMode? mode, int max, CancellationToken ct) => throw new NotSupportedException();
+    public Task<IReadOnlyList<ProgressRow>> GetProgressAsync(int userId, SessionMode? mode, int max, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<ProgressRow>>([.. Sessions.Values
+            .Where(s => s.UserId == userId && (mode is null || s.Mode == mode) && Assessments.GetValueOrDefault(s.Id)?.Overall is not null)
+            .OrderByDescending(s => s.StartedAt).Take(max).OrderBy(s => s.StartedAt)
+            .Select(s =>
+            {
+                var a = Assessments[s.Id];
+                return new ProgressRow
+                {
+                    SessionId = s.Id, StartedAt = s.StartedAt, Mode = s.Mode, Fluency = a.Fluency, Grammar = a.Grammar,
+                    Vocabulary = a.Vocabulary, Interaction = a.Interaction, Pronunciation = a.Pronunciation, Overall = a.Overall!,
+                };
+            })]);
     public Task<IReadOnlyList<UserModelUsage>> GetUsageByUserAsync(DateTime since, CancellationToken ct) => throw new NotSupportedException();
     public Task<GradingClaim?> ClaimGradingAsync(int staleMinutes, int maxAttempts, CancellationToken ct) => throw new NotSupportedException();
     public Task<int> FailStaleGradingAsync(int staleMinutes, int maxAttempts, string error, CancellationToken ct) => throw new NotSupportedException();
@@ -111,6 +127,61 @@ internal sealed class InMemoryPracticeRepository : IPracticeRepository
 {
     public List<PracticeBatch> Saved { get; } = [];
 
+    /// <summary>Items for the methods the prep agent uses; <see cref="UpsertAsync"/> only records batches.</summary>
+    public List<PracticeItemRow> Items { get; } = [];
+
+    public PracticeItemRow Add(int userId, PracticeKind kind, string target, byte box = 0, bool mastered = false, double? lastScore = null)
+    {
+        var item = new PracticeItemRow
+        {
+            Id = Items.Count + 1, UserId = userId, Kind = kind, Target = target, TargetKey = PracticeSeeds.Key(target), Box = box,
+            DueAt = mastered ? null : new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc), LastScore = lastScore,
+            Attempts = lastScore is null ? 0 : 1,
+        };
+        Items.Add(item);
+        return item;
+    }
+
+    public Task<PracticeItemRow?> GetAsync(long id, int userId, CancellationToken ct) =>
+        Task.FromResult(Items.FirstOrDefault(i => i.Id == id && i.UserId == userId));
+
+    public Task<IReadOnlyList<PracticeItemRow>> ListAsync(int userId, bool includeMastered, int limit, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<PracticeItemRow>>([.. Items
+            .Where(i => i.UserId == userId && (includeMastered || i.DueAt is not null))
+            .OrderBy(i => i.DueAt is null).ThenBy(i => i.Box).ThenBy(i => i.LastScore ?? -1).Take(limit)]);
+
+    public Task<IReadOnlyList<PracticeItemRow>> FindByTargetKeysAsync(int userId, IReadOnlyCollection<string> keys, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<PracticeItemRow>>([.. Items.Where(i => i.UserId == userId && keys.Contains(i.TargetKey))]);
+
+    public Task<IReadOnlyList<PracticeItemRow>> InsertNewAsync(PracticeBatch batch, IUnitOfWork work, CancellationToken ct)
+    {
+        var added = batch.Items
+            .Where(s => !Items.Any(i => i.UserId == batch.UserId && i.TargetKey == s.TargetKey))
+            .Select((s, n) => new PracticeItemRow
+            {
+                Id = Items.Count + n + 1, UserId = batch.UserId, SessionId = batch.SessionId, Kind = s.Kind, Target = s.Target,
+                TargetKey = s.TargetKey, Explanation = s.Explanation, DueAt = batch.Now, CreatedAt = batch.Now, UpdatedAt = batch.Now,
+            })
+            .ToList();
+        ((FakeUnitOfWork)work).OnCommit(() => Items.AddRange(added));
+        return Task.FromResult<IReadOnlyList<PracticeItemRow>>(added);
+    }
+
+    public Task<PracticeItemRow?> RestartAsync(long id, int userId, DateTime now, IUnitOfWork work, CancellationToken ct)
+    {
+        var item = Items.FirstOrDefault(i => i.Id == id && i.UserId == userId);
+        if (item is not null)
+        {
+            ((FakeUnitOfWork)work).OnCommit(() =>
+            {
+                item.Box = 0;
+                item.DueAt = now;
+            });
+        }
+
+        return Task.FromResult(item);
+    }
+
     public Task UpsertAsync(PracticeBatch batch, IUnitOfWork work, CancellationToken ct)
     {
         ((FakeUnitOfWork)work).OnCommit(() => Saved.Add(batch));
@@ -119,7 +190,6 @@ internal sealed class InMemoryPracticeRepository : IPracticeRepository
 
     public Task<IReadOnlyList<PracticeItemRow>> ListDueAsync(int userId, DateTime now, int limit, CancellationToken ct) => throw new NotSupportedException();
     public Task<PracticeCounts> CountAsync(int userId, DateTime now, CancellationToken ct) => throw new NotSupportedException();
-    public Task<PracticeItemRow?> GetAsync(long id, int userId, CancellationToken ct) => throw new NotSupportedException();
     public Task<PracticeItemRow?> RecordAttemptAsync(long id, int userId, double score, byte box, DateTime? dueAt, DateTime now, CancellationToken ct) => throw new NotSupportedException();
     public Task<bool> DeleteAsync(long id, int userId, CancellationToken ct) => throw new NotSupportedException();
 }

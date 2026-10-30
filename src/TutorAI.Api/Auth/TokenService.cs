@@ -16,32 +16,58 @@ public sealed class TokenService(IOptions<AuthOptions> options, TimeProvider clo
     public const string RoleClaim = "role";
     /// <summary>Must match dbo.Users.TokenVersion; bumping that column revokes every token issued before.</summary>
     public const string VersionClaim = "ver";
+    public const string ScopeClaim = "scope";
+    /// <summary>The only scope an MCP token carries: read the user's own data through /mcp.</summary>
+    public const string McpReadScope = "mcp.read";
 
+    /// <summary>A short-lived token for the web app, accepted by /api/*.</summary>
     public IssuedToken Issue(UserRow user)
     {
         var auth = options.Value;
-        var expires = clock.GetUtcNow().UtcDateTime.AddMinutes(auth.TokenLifetimeMinutes);
+        return Create(user, auth.Audience, clock.GetUtcNow().UtcDateTime.AddMinutes(auth.TokenLifetimeMinutes), scope: null);
+    }
+
+    /// <summary>
+    /// A long-lived, read-only token for MCP clients, accepted only by /mcp (its audience differs from the web
+    /// app's). It carries the user's token version, so a password change or disable revokes it.
+    /// </summary>
+    public IssuedToken IssueMcp(UserRow user)
+    {
+        var auth = options.Value;
+        return Create(user, auth.McpAudience, clock.GetUtcNow().UtcDateTime.AddDays(auth.McpTokenDays), McpReadScope);
+    }
+
+    private IssuedToken Create(UserRow user, string audience, DateTime expires, string? scope)
+    {
+        var auth = options.Value;
+        var claims = new Dictionary<string, object>
+        {
+            [UserIdClaim] = user.Id.ToString(),
+            [NameClaim] = user.Username,
+            [RoleClaim] = user.Role,
+            [VersionClaim] = user.TokenVersion.ToString(),
+        };
+        if (scope is not null)
+        {
+            claims[ScopeClaim] = scope;
+        }
+
         var token = new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
         {
             Issuer = auth.Issuer,
-            Audience = auth.Audience,
+            Audience = audience,
             Expires = expires,
-            Claims = new Dictionary<string, object>
-            {
-                [UserIdClaim] = user.Id.ToString(),
-                [NameClaim] = user.Username,
-                [RoleClaim] = user.Role,
-                [VersionClaim] = user.TokenVersion.ToString(),
-            },
+            Claims = claims,
             SigningCredentials = new SigningCredentials(SigningKey(auth), SecurityAlgorithms.HmacSha256),
         });
         return new IssuedToken(token, expires);
     }
 
-    public static TokenValidationParameters ValidationParameters(AuthOptions auth) => new()
+    /// <param name="audience">The audience to accept; the web app's when null.</param>
+    public static TokenValidationParameters ValidationParameters(AuthOptions auth, string? audience = null) => new()
     {
         ValidIssuer = auth.Issuer,
-        ValidAudience = auth.Audience,
+        ValidAudience = audience ?? auth.Audience,
         IssuerSigningKey = SigningKey(auth),
         ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
         NameClaimType = NameClaim,

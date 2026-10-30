@@ -1,0 +1,52 @@
+{
+  "id": "long-job-description",
+  "description": "A long posting still completes within the step limit.",
+  "jobDescription": "Senior Mobile Engineer (iOS). About us: we are a fintech company serving two million customers across Europe. Senior Mobile Engineer (iOS). About us: we are a fintech company serving two million customers across Europe. Senior Mobile Engineer (iOS). About us: we are a fintech company serving two million customers across Europe. Senior Mobile Engineer (iOS). About us: we are a fintech company serving two million customers across Europe. Senior Mobile Engineer (iOS). About us: we are a fintech company serving two million customers across Europe. Senior Mobile Engineer (iOS). About us: we are a fintech company serving two million customers across Europe. Responsibilities: build features in Swift and SwiftUI, own app performance and crash rates, review code, mentor two engineers, work with designers and product managers, take part in on-call for the mobile API. Responsibilities: build features in Swift and SwiftUI, own app performance and crash rates, review code, mentor two engineers, work with designers and product managers, take part in on-call for the mobile API. Responsibilities: build features in Swift and SwiftUI, own app performance and crash rates, review code, mentor two engineers, work with designers and product managers, take part in on-call for the mobile API. Responsibilities: build features in Swift and SwiftUI, own app performance and crash rates, review code, mentor two engineers, work with designers and product managers, take part in on-call for the mobile API. Requirements: five years of iOS, strong Swift, experience with accessibility, testing with XCTest, CI with GitHub Actions, and clear written and spoken English. Requirements: five years of iOS, strong Swift, experience with accessibility, testing with XCTest, CI with GitHub Actions, and clear written and spoken English. Requirements: five years of iOS, strong Swift, experience with accessibility, testing with XCTest, CI with GitHub Actions, and clear written and spoken English. ",
+  "role": "iOS engineer",
+  "seniority": "Senior",
+  "learner": {
+    "sessions": [
+      {
+        "daysAgo": 3,
+        "overall": "B1",
+        "advice": "Keep the conversation going: ask a follow-up question and develop answers with an example.",
+        "interaction": "A2+",
+        "grammar": "B1",
+        "corrections": [
+          [
+            "I am work here since two years",
+            "I have worked here for two years"
+          ]
+        ]
+      },
+      {
+        "daysAgo": 10,
+        "overall": "B1",
+        "advice": "Use the past simple consistently for finished actions.",
+        "interaction": "B1",
+        "grammar": "A2+",
+        "corrections": [
+          [
+            "yesterday we go to the client",
+            "yesterday we went to the client"
+          ]
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "calls": [
+      "get_weak_areas",
+      "plan_questions",
+      "add_practice_items",
+      "schedule_drill"
+    ],
+    "questionsMin": 3,
+    "questionsMax": 8,
+    "phrasesMin": 1,
+    "drill": true,
+    "questionsMention": [
+      "iOS|Swift|app|mobile"
+    ]
+  }
+}

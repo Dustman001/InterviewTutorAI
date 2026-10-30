@@ -14,18 +14,21 @@ public readonly record struct PracticeKind : IStringValue<PracticeKind>
     /// <summary>A word the learner mispronounced.</summary>
     public static readonly PracticeKind Word = new("word");
 
+    /// <summary>A phrase to rehearse for an interview, added by the prep agent.</summary>
+    public static readonly PracticeKind Phrase = new("phrase");
+
     private PracticeKind(string value) => Value = value;
 
     public string Value { get; }
-    public static IReadOnlyList<PracticeKind> All { get; } = [Correction, Word];
+    public static IReadOnlyList<PracticeKind> All { get; } = [Correction, Word, Phrase];
     public override string ToString() => Value;
 }
 
 /// <summary>An item to add (or merge) when a session is graded.</summary>
 public sealed record PracticeSeed(PracticeKind Kind, string Target, string TargetKey, string? Original, string? Explanation);
 
-/// <summary>The items one graded session adds, saved in the same transaction as its assessment.</summary>
-public sealed record PracticeBatch(int UserId, Guid SessionId, string? Locale, DateTime Now, IReadOnlyList<PracticeSeed> Items);
+/// <summary>Items to add for one user: from a graded session, or (no session) from the prep agent.</summary>
+public sealed record PracticeBatch(int UserId, Guid? SessionId, string? Locale, DateTime Now, IReadOnlyList<PracticeSeed> Items);
 
 public sealed class PracticeItemRow
 {

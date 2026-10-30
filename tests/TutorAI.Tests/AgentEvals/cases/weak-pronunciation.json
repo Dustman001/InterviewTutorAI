@@ -1,0 +1,49 @@
+{
+  "id": "weak-pronunciation",
+  "description": "Pronunciation is the weakest area; phrases help with it.",
+  "jobDescription": "Hotel Receptionist. Welcome guests, handle check-in and check-out, answer phone calls and resolve complaints politely.",
+  "role": "Receptionist",
+  "seniority": null,
+  "learner": {
+    "sessions": [
+      {
+        "daysAgo": 3,
+        "overall": "B2",
+        "advice": "Work on word stress in longer words.",
+        "interaction": "B2",
+        "grammar": "B2"
+      }
+    ],
+    "practice": [
+      {
+        "kind": "word",
+        "target": "comfortable",
+        "step": 1,
+        "mastered": false,
+        "lastScore": 55
+      },
+      {
+        "kind": "word",
+        "target": "reservation",
+        "step": 0,
+        "mastered": false,
+        "lastScore": 48
+      }
+    ]
+  },
+  "expect": {
+    "calls": [
+      "get_weak_areas",
+      "plan_questions",
+      "add_practice_items",
+      "schedule_drill"
+    ],
+    "questionsMin": 3,
+    "questionsMax": 8,
+    "phrasesMin": 2,
+    "drill": true,
+    "questionsMention": [
+      "guest|complaint|check-in|customer"
+    ]
+  }
+}

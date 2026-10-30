@@ -18,7 +18,9 @@ using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
 using TutorAI.Api.Endpoints;
 using TutorAI.Api.Health;
+using TutorAI.Api.Mcp;
 using TutorAI.Api.Practice;
+using TutorAI.Api.Prep;
 using TutorAI.Api.Speech;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -49,6 +51,7 @@ builder.Services.Configure<AzureSpeechOptions>(builder.Configuration.GetSection(
 builder.Services.Configure<AnthropicOptions>(builder.Configuration.GetSection("Anthropic"));
 builder.Services.Configure<AssessmentOptions>(builder.Configuration.GetSection("Assessment"));
 builder.Services.Configure<SessionLimitsOptions>(builder.Configuration.GetSection("Sessions"));
+builder.Services.Configure<PrepOptions>(builder.Configuration.GetSection("Prep"));
 builder.Services.Configure<Dictionary<string, ModelPrice>>(builder.Configuration.GetSection("Pricing"));
 
 // No request needs more than a long spoken turn with its pronunciation results.
@@ -74,6 +77,9 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
 builder.Services.AddAuthorizationBuilder()
     .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build())
     .AddPolicy(UserRoles.Admin, policy => policy.RequireRole(UserRoles.Admin));
+
+// The MCP server at /mcp, with its own read-only tokens (Mcp/McpSetup.cs).
+builder.AddTutorMcp();
 
 builder.Services.AddRateLimiter(limiter =>
 {
@@ -102,6 +108,16 @@ builder.Services.AddRateLimiter(limiter =>
         });
     });
 
+    limiter.AddMcpRateLimit();
+
+    limiter.AddPolicy(PrepEndpoints.RunsPolicy, http =>
+    {
+        var perMinute = http.RequestServices.GetRequiredService<IOptions<PrepOptions>>().Value.RunsPerMinute;
+        return RateLimitPartition.GetFixedWindowLimiter(
+            http.User.FindFirst(TokenService.UserIdClaim)?.Value ?? "anonymous",
+            _ => new FixedWindowRateLimiterOptions { PermitLimit = perMinute, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 });
+    });
+
     limiter.AddPolicy(SessionEndpoints.TurnsPolicy, http =>
     {
         var perMinute = http.RequestServices.GetRequiredService<IOptions<SessionLimitsOptions>>().Value.TurnsPerMinute;
@@ -128,6 +144,10 @@ builder.Services.AddSingleton<ISessionRepository, SessionRepository>();
 builder.Services.AddSingleton<IUserRepository, UserRepository>();
 builder.Services.AddSingleton<IPracticeRepository, PracticeRepository>();
 builder.Services.AddSingleton<IGradingFollowUp, PracticeFromGrading>();
+builder.Services.AddSingleton<IPrepRepository, PrepRepository>();
+builder.Services.AddSingleton<IPrepChatClientFactory, AnthropicPrepChatClientFactory>();
+builder.Services.AddSingleton<PrepAgent>();
+builder.Services.AddSingleton<PrepService>();
 builder.Services.AddSingleton<IPasswordHasher<UserRow>, PasswordHasher<UserRow>>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<TokenService>();
@@ -228,6 +248,8 @@ app.MapUserEndpoints();
 app.MapSessionEndpoints();
 app.MapProgressEndpoints();
 app.MapPracticeEndpoints();
+app.MapPrepEndpoints();
+app.MapTutorMcp();
 
 app.Run();
 

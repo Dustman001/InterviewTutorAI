@@ -1,0 +1,66 @@
+{
+  "id": "in-progress-item-relevant",
+  "description": "An item well along (step 3) is central to this finance job: propose a restart.",
+  "jobDescription": "Financial Analyst, FP&A. Own the quarterly budget process, build forecasts, and explain variances to department heads every month.",
+  "role": "Financial analyst",
+  "seniority": null,
+  "learner": {
+    "sessions": [
+      {
+        "daysAgo": 3,
+        "overall": "B1",
+        "advice": "Keep the conversation going: ask a follow-up question and develop answers with an example.",
+        "interaction": "A2+",
+        "grammar": "B1",
+        "corrections": [
+          [
+            "I am work here since two years",
+            "I have worked here for two years"
+          ]
+        ]
+      },
+      {
+        "daysAgo": 10,
+        "overall": "B1",
+        "advice": "Use the past simple consistently for finished actions.",
+        "interaction": "B1",
+        "grammar": "A2+",
+        "corrections": [
+          [
+            "yesterday we go to the client",
+            "yesterday we went to the client"
+          ]
+        ]
+      }
+    ],
+    "practice": [
+      {
+        "kind": "correction",
+        "target": "I was responsible for the quarterly budget.",
+        "step": 2,
+        "mastered": false,
+        "lastScore": 84
+      },
+      {
+        "kind": "word",
+        "target": "weather",
+        "step": 1,
+        "mastered": false,
+        "lastScore": 60
+      }
+    ]
+  },
+  "expect": {
+    "calls": [
+      "get_weak_areas",
+      "plan_questions",
+      "add_practice_items",
+      "schedule_drill"
+    ],
+    "questionsMin": 3,
+    "questionsMax": 8,
+    "phrasesMin": 1,
+    "drill": true,
+    "restartTarget": "I was responsible for the quarterly budget."
+  }
+}

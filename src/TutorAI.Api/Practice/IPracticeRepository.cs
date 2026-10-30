@@ -20,4 +20,17 @@ public interface IPracticeRepository
 
     /// <returns>False when the user has no such item.</returns>
     Task<bool> DeleteAsync(long id, int userId, CancellationToken ct);
+
+    /// <summary>The user's items, mastered ones only when asked: the weakest first (lowest box, then lowest last score).</summary>
+    Task<IReadOnlyList<PracticeItemRow>> ListAsync(int userId, bool includeMastered, int limit, CancellationToken ct);
+
+    /// <summary>The user's items whose TargetKey is one of <paramref name="keys"/>, of any kind.</summary>
+    Task<IReadOnlyList<PracticeItemRow>> FindByTargetKeysAsync(int userId, IReadOnlyCollection<string> keys, CancellationToken ct);
+
+    /// <summary>Adds the batch's items that the user doesn't have yet, as part of <paramref name="work"/>; never merges.</summary>
+    /// <returns>The items added.</returns>
+    Task<IReadOnlyList<PracticeItemRow>> InsertNewAsync(PracticeBatch batch, IUnitOfWork work, CancellationToken ct);
+
+    /// <summary>Sends the item back to box 0, due now, as part of <paramref name="work"/>. Its attempts and best score are kept.</summary>
+    Task<PracticeItemRow?> RestartAsync(long id, int userId, DateTime now, IUnitOfWork work, CancellationToken ct);
 }

@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { mcpToken, type McpToken } from "@/lib/api";
 import { useHydrated } from "@/lib/hydrated";
+import { formatWhen } from "@/lib/prep";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -14,6 +16,20 @@ export default function Account() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [token, setToken] = useState<McpToken | null>(null);
+  const [tokenBusy, setTokenBusy] = useState(false);
+
+  async function createMcpToken() {
+    setError(null);
+    setTokenBusy(true);
+    try {
+      setToken(await mcpToken());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not create a token.");
+    } finally {
+      setTokenBusy(false);
+    }
+  }
 
   async function changePassword(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -111,6 +127,35 @@ export default function Account() {
           {busy ? "Changing…" : "Change password"}
         </button>
       </form>
+
+      <section className="card setup account-mcp" aria-labelledby="mcp-title">
+        <h2 className="card-title" id="mcp-title">
+          Connect Claude or Copilot (MCP)
+        </h2>
+        <p className="hint">
+          A read-only token lets an MCP client such as Claude Code, Claude Desktop or GitHub Copilot read your progress,
+          practice items and sessions. It can&apos;t change anything. It lasts 30 days; changing your password revokes it.
+        </p>
+        {token ? (
+          <>
+            <p className="hint" role="status">
+              Copy it now; it isn&apos;t shown again. Valid until {formatWhen(token.expiresAt)}.
+            </p>
+            <p className="mcp-token">{token.token}</p>
+            <p className="hint">
+              The server is <code>{token.path}</code> on the API&apos;s address. For Claude Code:
+            </p>
+            <p className="mcp-token">
+              claude mcp add --transport http tutorai &lt;API URL&gt;{token.path} --header &quot;Authorization: Bearer{" "}
+              {token.token}&quot;
+            </p>
+          </>
+        ) : (
+          <button type="button" disabled={!hydrated || tokenBusy} onClick={() => void createMcpToken()}>
+            {tokenBusy ? "Creating…" : "Create MCP token"}
+          </button>
+        )}
+      </section>
     </main>
   );
 }

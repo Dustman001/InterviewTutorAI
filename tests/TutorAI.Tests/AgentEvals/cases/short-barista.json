@@ -1,0 +1,33 @@
+{
+  "id": "short-barista",
+  "description": "A short but real job description.",
+  "jobDescription": "Barista at a busy city cafe, weekend shifts, fast-paced, friendly customer service.",
+  "role": "Barista",
+  "seniority": null,
+  "learner": {
+    "sessions": [
+      {
+        "daysAgo": 5,
+        "overall": "A2+",
+        "advice": "Use more varied vocabulary for describing routines.",
+        "interaction": "A2+",
+        "grammar": "A2"
+      }
+    ]
+  },
+  "expect": {
+    "calls": [
+      "get_weak_areas",
+      "plan_questions",
+      "add_practice_items",
+      "schedule_drill"
+    ],
+    "questionsMin": 3,
+    "questionsMax": 8,
+    "phrasesMin": 1,
+    "drill": true,
+    "questionsMention": [
+      "customer|busy|pressure|rush"
+    ]
+  }
+}

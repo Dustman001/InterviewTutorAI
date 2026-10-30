@@ -1,0 +1,50 @@
+{
+  "id": "technical-interview",
+  "description": "The posting says the interview is technical.",
+  "jobDescription": "Site Reliability Engineer. The interview is a technical interview: expect questions on Linux, networking, monitoring and incident response.",
+  "role": "SRE",
+  "seniority": "Senior",
+  "learner": {
+    "sessions": [
+      {
+        "daysAgo": 3,
+        "overall": "B1",
+        "advice": "Keep the conversation going: ask a follow-up question and develop answers with an example.",
+        "interaction": "A2+",
+        "grammar": "B1",
+        "corrections": [
+          [
+            "I am work here since two years",
+            "I have worked here for two years"
+          ]
+        ]
+      },
+      {
+        "daysAgo": 10,
+        "overall": "B1",
+        "advice": "Use the past simple consistently for finished actions.",
+        "interaction": "B1",
+        "grammar": "A2+",
+        "corrections": [
+          [
+            "yesterday we go to the client",
+            "yesterday we went to the client"
+          ]
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "calls": [
+      "get_weak_areas",
+      "plan_questions",
+      "add_practice_items",
+      "schedule_drill"
+    ],
+    "questionsMin": 3,
+    "questionsMax": 8,
+    "phrasesMin": 1,
+    "drill": true,
+    "drillType": "technical"
+  }
+}

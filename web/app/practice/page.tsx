@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { practice, type PracticeAttempt, type PracticeDue, type PracticeItem } from "@/lib/api";
-import { describeDue, RATING_LABELS, rateWord, stepLabel, type WordRating } from "@/lib/practice";
+import { describeDue, KIND_LABELS, RATING_LABELS, rateWord, stepLabel, type WordRating } from "@/lib/practice";
 import type { ReadAloud } from "@/lib/read-aloud";
 
 type Phase = "idle" | "playing" | "recording" | "scoring";
@@ -160,7 +160,7 @@ export default function Practice() {
       {item && (
         <section className="card practice-card" aria-live="polite">
           <p className="meta">
-            {item.kind === "correction" ? "Correction" : "Word"} · {stepLabel(item.box)}
+            {KIND_LABELS[item.kind]} · {stepLabel(item.box)}
             {item.bestScore !== null && ` · best ${Math.round(item.bestScore)}`}
           </p>
           {item.original && (

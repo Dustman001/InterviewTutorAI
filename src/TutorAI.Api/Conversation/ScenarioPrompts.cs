@@ -48,6 +48,16 @@ public static class ScenarioPrompts
                 sb.AppendLine().AppendLine("Job description supplied by the candidate:").AppendLine(scenario.JobDescription.Trim());
             }
 
+            if (scenario.Questions is { Count: > 0 } questions)
+            {
+                sb.AppendLine().AppendLine(
+                    "Planned questions, prepared for this candidate. Ask them in this order, one at a time, with your own follow-ups; skip any the time doesn't allow:");
+                for (var i = 0; i < questions.Count; i++)
+                {
+                    sb.AppendLine($"{i + 1}. {questions[i].Trim()}");
+                }
+            }
+
             sb.AppendLine().AppendLine(
                 """
                 How to run it:

@@ -1,3 +1,5 @@
+import type { PracticeKind } from "./api";
+
 /** Mirrors the API's PracticeSchedule.PassScore. */
 export const PASS_SCORE = 80;
 
@@ -35,3 +37,9 @@ export function describeDue(dueAt: string | null, now: Date = new Date()): strin
 export function stepLabel(box: number): string {
   return `Step ${box + 1} of 5`;
 }
+
+export const KIND_LABELS: Record<PracticeKind, string> = {
+  correction: "Correction",
+  word: "Word",
+  phrase: "Interview phrase",
+};

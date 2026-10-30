@@ -1,0 +1,33 @@
+{
+  "id": "support-junior",
+  "description": "Entry-level customer support.",
+  "jobDescription": "Customer Support Specialist. Answer customer emails and calls, troubleshoot account problems, and escalate bugs to engineering with clear notes.",
+  "role": "Support specialist",
+  "seniority": "Junior",
+  "learner": {
+    "sessions": [
+      {
+        "daysAgo": 2,
+        "overall": "A2+",
+        "advice": "Answer in full sentences and add one detail.",
+        "interaction": "A2",
+        "grammar": "A2+"
+      }
+    ]
+  },
+  "expect": {
+    "calls": [
+      "get_weak_areas",
+      "plan_questions",
+      "add_practice_items",
+      "schedule_drill"
+    ],
+    "questionsMin": 3,
+    "questionsMax": 8,
+    "phrasesMin": 1,
+    "drill": true,
+    "questionsMention": [
+      "customer"
+    ]
+  }
+}

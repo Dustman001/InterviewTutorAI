@@ -1,0 +1,26 @@
+{
+  "id": "new-learner-no-history",
+  "description": "No graded sessions: plan from the job alone.",
+  "jobDescription": "Junior Data Analyst. Build dashboards in Power BI, write SQL queries against our sales database, and present weekly findings to the sales team.",
+  "role": "Data analyst",
+  "seniority": "Junior",
+  "learner": null,
+  "expect": {
+    "calls": [
+      "get_weak_areas",
+      "plan_questions",
+      "add_practice_items",
+      "schedule_drill"
+    ],
+    "questionsMin": 3,
+    "questionsMax": 8,
+    "phrasesMin": 1,
+    "drill": true,
+    "questionsMention": [
+      "SQL|data|dashboard|Power BI"
+    ],
+    "notCalled": [
+      "restart_practice_item"
+    ]
+  }
+}

@@ -10,7 +10,7 @@ async function forward(request: NextRequest): Promise<NextResponse> {
   const session = await resolveSession(request.cookies.get(SESSION_COOKIE)?.value);
 
   const headers = new Headers();
-  for (const name of ["content-type", "accept"]) {
+  for (const name of ["content-type", "accept", "idempotency-key"]) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
