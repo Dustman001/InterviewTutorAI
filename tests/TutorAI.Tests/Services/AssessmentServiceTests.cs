@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using TutorAI.Api;
 using TutorAI.Api.Assessment;
 using TutorAI.Api.Data;
+using TutorAI.Api.Practice;
 using TutorAI.Tests.Integration;
 
 namespace TutorAI.Tests.Services;
@@ -16,9 +17,10 @@ public class AssessmentServiceTests
     private readonly FakeUnitOfWorkFactory _database = new();
     private readonly GradingSignal _signal = new();
 
-    private AssessmentService Service(ICefrGrader grader) =>
-        new(_sessions, _practice, _database, grader, _signal, Options.Create(new AssessmentOptions { MinUserWords = MinWords }),
-            new FixedClock(new DateTimeOffset(2026, 10, 29, 12, 0, 0, TimeSpan.Zero)));
+    private AssessmentService Service(ICefrGrader grader, params IGradingFollowUp[] extra) =>
+        new(_sessions, _database, grader,
+            [new PracticeFromGrading(_practice, new FixedClock(new DateTimeOffset(2026, 10, 29, 12, 0, 0, TimeSpan.Zero))), .. extra],
+            _signal, Options.Create(new AssessmentOptions { MinUserWords = MinWords }));
 
     private SessionRow Session(int learnerWords, GradingState? grading = null)
     {
@@ -118,5 +120,49 @@ public class AssessmentServiceTests
 
         Assert.True(_sessions.Assessments.ContainsKey(session.Id));
         Assert.Empty(_practice.Saved);
+    }
+
+    [Fact]
+    public async Task A_failing_follow_up_saves_neither_it_nor_the_assessment()
+    {
+        var session = Session(learnerWords: MinWords);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Service(new FakeGrader { Corrections = [new("a", "b", "c")] }, new FailingFollowUp()).GradeAsync(session.Id, CancellationToken.None));
+
+        Assert.False(Assert.Single(_database.Started).Committed);
+        Assert.Empty(_sessions.Assessments);
+        Assert.Empty(_practice.Saved);
+    }
+
+    [Fact]
+    public async Task Follow_ups_run_only_for_sessions_that_were_graded()
+    {
+        var followUp = new RecordingFollowUp();
+        var tooShort = Session(learnerWords: MinWords - 1);
+        var graded = Session(learnerWords: MinWords);
+
+        await Service(new FakeGrader(), followUp).GradeAsync(tooShort.Id, CancellationToken.None);
+        await Service(new FakeGrader(), followUp).GradeAsync(graded.Id, CancellationToken.None);
+
+        Assert.Equal(graded.Id, Assert.Single(followUp.Seen).Session.Id);
+        Assert.Equal("B1", followUp.Seen[0].Grading.Fluency.Level);
+    }
+
+    private sealed class FailingFollowUp : IGradingFollowUp
+    {
+        public Task OnGradedAsync(GradedSession graded, IUnitOfWork work, CancellationToken ct) =>
+            throw new InvalidOperationException("follow-up failed");
+    }
+
+    private sealed class RecordingFollowUp : IGradingFollowUp
+    {
+        public List<GradedSession> Seen { get; } = [];
+
+        public Task OnGradedAsync(GradedSession graded, IUnitOfWork work, CancellationToken ct)
+        {
+            Seen.Add(graded);
+            return Task.CompletedTask;
+        }
     }
 }

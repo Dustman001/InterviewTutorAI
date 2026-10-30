@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using TutorAI.Api;
 using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
 using TutorAI.Api.Practice;

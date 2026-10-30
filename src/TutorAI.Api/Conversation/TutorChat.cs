@@ -9,16 +9,6 @@ using TutorAI.Api.Speech;
 
 namespace TutorAI.Api.Conversation;
 
-/// <summary>Token counts for one Claude call, filled in as the stream reports them.</summary>
-public sealed class ClaudeUsage
-{
-    public string Model { get; set; } = "";
-    public long InputTokens { get; set; }
-    public long OutputTokens { get; set; }
-    public long CacheReadTokens { get; set; }
-    public long CacheWriteTokens { get; set; }
-}
-
 /// <summary>Produces the tutor's next spoken turn, streamed as text fragments.</summary>
 public interface ITutorChat
 {

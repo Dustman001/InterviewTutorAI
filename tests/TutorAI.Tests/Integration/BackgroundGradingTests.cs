@@ -6,6 +6,7 @@ using Dapper;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using TutorAI.Api;
 using TutorAI.Api.Assessment;
 using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
