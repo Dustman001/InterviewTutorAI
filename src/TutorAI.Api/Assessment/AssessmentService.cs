@@ -1,8 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Options;
-using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
-using TutorAI.Api.Practice;
 
 namespace TutorAI.Api.Assessment;
 
@@ -26,8 +24,8 @@ public sealed record AssessmentResponse(
 public sealed record EndResult(AssessmentResponse? Assessment, GradingState? GradingState);
 
 public sealed class AssessmentService(
-    ISessionRepository repository, IPracticeRepository practiceItems, IUnitOfWorkFactory database, ICefrGrader grader,
-    GradingSignal signal, IOptions<AssessmentOptions> options, TimeProvider clock)
+    ISessionRepository repository, IUnitOfWorkFactory database, ICefrGrader grader, IEnumerable<IGradingFollowUp> followUps,
+    GradingSignal signal, IOptions<AssessmentOptions> options)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -71,8 +69,8 @@ public sealed class AssessmentService(
     }
 
     /// <summary>
-    /// Grades the session from its stored turns and saves the assessment, with the session's corrections and weak
-    /// words as practice items for its owner. Called by the grading worker.
+    /// Grades the session from its stored turns and saves the assessment, together with whatever the follow-ups
+    /// (<see cref="IGradingFollowUp"/>) build on it. Called by the grading worker.
     /// </summary>
     public async Task GradeAsync(Guid sessionId, CancellationToken ct)
     {
@@ -82,18 +80,12 @@ public sealed class AssessmentService(
         var metrics = ComputeMetrics(turns);
 
         var row = Insufficient(sessionId, metrics);
-        PracticeBatch? practice = null;
+        GradedSession? graded = null;
         if (row is null)
         {
             var usage = new ClaudeUsage();
             var grading = await grader.GradeAsync(session, turns, metrics.Fluency, usage, ct);
-            if (session.UserId is { } userId)
-            {
-                var accent = JsonSerializer.Deserialize<Scenario>(session.ScenarioJson, Json)?.Accent;
-                practice = new PracticeBatch(
-                    userId, sessionId, accent, clock.GetUtcNow().UtcDateTime,
-                    PracticeSeeds.FromAssessment(grading, metrics.Pronunciation));
-            }
+            graded = new GradedSession(session, grading, metrics);
 
             row = new AssessmentRow
             {
@@ -117,17 +109,20 @@ public sealed class AssessmentService(
             row.Overall = CefrMapper.Median([row.Fluency, row.Grammar, row.Vocabulary, row.Interaction, row.Pronunciation]);
         }
 
-        await SaveAsync(row, practice, ct);
+        await SaveAsync(row, graded, ct);
     }
 
-    /// <summary>Saves the assessment and its practice items together: both or neither.</summary>
-    private async Task<AssessmentRow> SaveAsync(AssessmentRow row, PracticeBatch? practice, CancellationToken ct)
+    /// <summary>Saves the assessment and runs the follow-ups of a graded session in one transaction: all or nothing.</summary>
+    private async Task<AssessmentRow> SaveAsync(AssessmentRow row, GradedSession? graded, CancellationToken ct)
     {
         await using var work = await database.BeginAsync(ct);
         var saved = await repository.SaveAssessmentAsync(row, work, ct);
-        if (practice is not null)
+        if (graded is not null)
         {
-            await practiceItems.UpsertAsync(practice, work, ct);
+            foreach (var followUp in followUps)
+            {
+                await followUp.OnGradedAsync(graded, work, ct);
+            }
         }
 
         await work.CommitAsync(ct);

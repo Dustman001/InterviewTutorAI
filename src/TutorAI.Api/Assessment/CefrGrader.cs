@@ -3,7 +3,6 @@ using System.Text.Json;
 using Anthropic;
 using Anthropic.Models.Messages;
 using Microsoft.Extensions.Options;
-using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
 
 namespace TutorAI.Api.Assessment;

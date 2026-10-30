@@ -127,6 +127,7 @@ builder.Services.AddSingleton<IUnitOfWorkFactory>(sp => sp.GetRequiredService<Sq
 builder.Services.AddSingleton<ISessionRepository, SessionRepository>();
 builder.Services.AddSingleton<IUserRepository, UserRepository>();
 builder.Services.AddSingleton<IPracticeRepository, PracticeRepository>();
+builder.Services.AddSingleton<IGradingFollowUp, PracticeFromGrading>();
 builder.Services.AddSingleton<IPasswordHasher<UserRow>, PasswordHasher<UserRow>>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<TokenService>();
