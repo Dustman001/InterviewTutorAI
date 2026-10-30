@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
+using System.Reflection;
 using System.Text.Json;
 using Dapper;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using TutorAI.Api;
 using TutorAI.Api.Assessment;
 using TutorAI.Api.Conversation;
@@ -151,6 +153,36 @@ public sealed class BackgroundGradingTests(ThrowawayDatabase database) : IClassF
     }
 
     [E2EFact]
+    public async Task Shutting_down_while_a_claim_is_in_flight_still_puts_the_job_back()
+    {
+        // The claim commits in the database, then shutdown begins before the worker has read the claimed row:
+        // the window in which a cancellable claim threw and left the session Running with an attempt used.
+        var claims = new HeldClaims();
+        Guid sessionId;
+        await using (var api = TestApi.CreateWithServices(
+            database.ConnectionString,
+            services =>
+            {
+                services.AddSingleton<ICefrGrader>(new FakeGrader());
+                services.AddSingleton(sp => claims.Wrap(
+                    ActivatorUtilities.CreateInstance<SessionRepository>(sp),
+                    sp.GetRequiredService<IHostApplicationLifetime>()));
+            }))
+        {
+            var client = await SignInAsync(api);
+            sessionId = await CreateSpokenSessionAsync(api, client);
+            await client.PostAsync($"/api/sessions/{sessionId}/end", null);
+            await claims.Claimed.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal(("Running", 1), State(sessionId));
+        }
+
+        Assert.Equal(("Pending", 0), State(sessionId));
+
+        using var db = database.Open();
+        db.Execute("DELETE FROM dbo.Sessions WHERE Id = @sessionId", new { sessionId });
+    }
+
+    [E2EFact]
     public async Task Concurrent_claims_hand_a_job_to_exactly_one_worker()
     {
         var sessionId = Guid.NewGuid();
@@ -239,6 +271,71 @@ public sealed class BackgroundGradingTests(ThrowawayDatabase database) : IClassF
         using var db = database.Open();
         return db.QuerySingle<(string?, int)>(
             "SELECT GradingState, GradingAttempts FROM dbo.Sessions WHERE Id = @sessionId", new { sessionId });
+    }
+}
+
+/// <summary>
+/// Holds the first successful grading claim until the host starts stopping. If the claim was made with a
+/// cancellable token, it then fails once that token is cancelled, as Dapper does when cancelled after the
+/// database has committed but before the row is read.
+/// </summary>
+internal sealed class HeldClaims
+{
+    private readonly TaskCompletionSource _claimed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _held;
+
+    public Task Claimed => _claimed.Task;
+
+    public ISessionRepository Wrap(ISessionRepository inner, IHostApplicationLifetime lifetime)
+    {
+        var proxy = DispatchProxy.Create<ISessionRepository, Proxy>();
+        ((Proxy)(object)proxy).Init(inner, this, lifetime);
+        return proxy;
+    }
+
+    private async Task<GradingClaim?> HoldAsync(Task<GradingClaim?> claiming, CancellationToken ct, CancellationToken stopping)
+    {
+        var claim = await claiming;
+        if (claim is null || Interlocked.Exchange(ref _held, 1) == 1)
+        {
+            return claim;
+        }
+
+        _claimed.TrySetResult();
+        await Task.Delay(Timeout.Infinite, stopping).ContinueWith(_ => { }, TaskScheduler.Default);
+        if (ct.CanBeCanceled)
+        {
+            await Task.Delay(Timeout.Infinite, ct).ContinueWith(_ => { }, TaskScheduler.Default);
+            ct.ThrowIfCancellationRequested();
+        }
+
+        return claim;
+    }
+
+    public class Proxy : DispatchProxy
+    {
+        private ISessionRepository _inner = null!;
+        private HeldClaims _owner = null!;
+        private IHostApplicationLifetime _lifetime = null!;
+
+        internal void Init(ISessionRepository inner, HeldClaims owner, IHostApplicationLifetime lifetime) =>
+            (_inner, _owner, _lifetime) = (inner, owner, lifetime);
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            try
+            {
+                var result = targetMethod!.Invoke(_inner, args);
+                return targetMethod.Name == nameof(ISessionRepository.ClaimGradingAsync)
+                    ? _owner.HoldAsync((Task<GradingClaim?>)result!, (CancellationToken)args![2]!, _lifetime.ApplicationStopping)
+                    : result;
+            }
+            catch (TargetInvocationException ex) when (ex.InnerException is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(ex.InnerException);
+                throw;
+            }
+        }
     }
 }
 
