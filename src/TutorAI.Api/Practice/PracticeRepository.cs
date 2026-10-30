@@ -1,29 +1,26 @@
-using System.Data.Common;
 using Dapper;
 using Microsoft.Data.SqlClient;
+using TutorAI.Api.Data;
 
 namespace TutorAI.Api.Practice;
 
-public sealed class PracticeRepository(IConfiguration configuration)
+public sealed class PracticeRepository(SqlDatabase database) : IPracticeRepository
 {
-    private readonly string _connectionString = configuration.GetConnectionString("TutorAI")
-        ?? throw new InvalidOperationException("ConnectionStrings:TutorAI is not configured.");
-
-    private SqlConnection Open() => new(_connectionString);
+    private SqlConnection Open() => database.Open();
 
     /// <summary>
     /// Adds the batch's items, or merges each into the user's existing item with the same target, which is then
     /// due again from box 0. Grading the same session again leaves its own items' progress alone.
-    /// Runs on the caller's connection and transaction (the assessment's save).
     /// </summary>
-    public static async Task UpsertAsync(DbConnection db, DbTransaction transaction, PracticeBatch batch, CancellationToken ct)
+    public async Task UpsertAsync(PracticeBatch batch, IUnitOfWork work, CancellationToken ct)
     {
         if (batch.Items.Count == 0)
         {
             return;
         }
 
-        await db.ExecuteAsync(new CommandDefinition(
+        var sql = work.Sql();
+        await sql.Connection.ExecuteAsync(new CommandDefinition(
             """
             MERGE dbo.PracticeItems WITH (HOLDLOCK) AS t
             USING (SELECT @UserId AS UserId, @Kind AS Kind, @TargetKey AS TargetKey) AS s
@@ -40,7 +37,7 @@ public sealed class PracticeRepository(IConfiguration configuration)
                 batch.UserId, batch.SessionId, batch.Locale, batch.Now,
                 i.Kind, i.Target, i.TargetKey, i.Original, i.Explanation,
             }),
-            transaction,
+            sql.Transaction,
             cancellationToken: ct));
     }
 

@@ -1,5 +1,6 @@
 using Dapper;
 using Microsoft.Data.SqlClient;
+using TutorAI.Api.Data;
 
 namespace TutorAI.Api.Auth;
 
@@ -40,7 +41,7 @@ public sealed class UserListRow
     public int SessionsUsed { get; set; }
 }
 
-public sealed class UserRepository(IConfiguration configuration)
+public sealed class UserRepository(SqlDatabase database) : IUserRepository
 {
     private const string Columns =
         "Id, Username, PasswordHash, Role, SessionLimit, IsDisabled, TokenVersion, SessionsResetAt, ConfigPasswordHash, CreatedAt, " +
@@ -49,10 +50,7 @@ public sealed class UserRepository(IConfiguration configuration)
     /// <summary>Sessions that count towards the limit: those started since the last reset.</summary>
     internal const string CountedSessionsFilter = "s.UserId = u.Id AND s.StartedAt >= ISNULL(u.SessionsResetAt, '0001-01-01')";
 
-    private readonly string _connectionString = configuration.GetConnectionString("TutorAI")
-        ?? throw new InvalidOperationException("ConnectionStrings:TutorAI is not configured.");
-
-    private SqlConnection Open() => new(_connectionString);
+    private SqlConnection Open() => database.Open();
 
     public async Task<UserRow?> GetByUsernameAsync(string username, CancellationToken ct)
     {

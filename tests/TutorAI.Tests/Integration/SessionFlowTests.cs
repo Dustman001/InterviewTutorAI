@@ -54,8 +54,8 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
         var sessionId = await CreateSessionAsync(client);
 
         // Seed the learner's turn directly so this test needs no Claude call.
-        await api.Services.GetRequiredService<SessionRepository>().AddTurnAsync(
-            new TurnRow { SessionId = sessionId, Role = TurnRoles.User, Text = "I like travel very much.", WordCount = 5 },
+        await api.Services.GetRequiredService<ISessionRepository>().AddTurnAsync(
+            new TurnRow { SessionId = sessionId, Role = TurnRole.User, Text = "I like travel very much.", WordCount = 5 },
             CancellationToken.None);
 
         var response = await client.PostAsync($"/api/sessions/{sessionId}/end", null);
@@ -75,6 +75,27 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
         // A turn after the end is refused.
         var late = await client.PostAsJsonAsync($"/api/sessions/{sessionId}/turns", new { text = "One more thing." });
         Assert.Equal(HttpStatusCode.Conflict, late.StatusCode);
+        Assert.Equal("""{"error":"The session has ended."}""", await late.Content.ReadAsStringAsync());
+
+        // Modes, statuses and roles are stored and sent as the same text the web app and older rows use.
+        Assert.Equal(
+            ("Conversation", "user"),
+            db.QuerySingle<(string, string)>(
+                "SELECT s.Mode, t.Role FROM dbo.Sessions s JOIN dbo.Turns t ON t.SessionId = s.Id WHERE s.Id = @sessionId",
+                new { sessionId }));
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/sessions/{sessionId}");
+        Assert.Equal(
+            ("Conversation", "Ended", "user", "Done"),
+            (detail.GetProperty("session").GetProperty("mode").GetString(), detail.GetProperty("session").GetProperty("status").GetString(),
+             detail.GetProperty("turns")[0].GetProperty("role").GetString(), detail.GetProperty("grading").GetProperty("state").GetString()));
+        var listed = (await client.GetFromJsonAsync<JsonElement>("/api/sessions")).GetProperty("items")
+            .EnumerateArray().Single(s => s.GetProperty("id").GetGuid() == sessionId);
+        Assert.Equal(("Conversation", "Ended"), (listed.GetProperty("mode").GetString(), listed.GetProperty("status").GetString()));
+
+        // An unknown mode is refused with the same message as before.
+        var badMode = await client.PostAsJsonAsync("/api/sessions", new { mode = "conversation" });
+        Assert.Equal(HttpStatusCode.BadRequest, badMode.StatusCode);
+        Assert.Equal("""{"error":"Mode must be 'Conversation' or 'Interview'."}""", await badMode.Content.ReadAsStringAsync());
     }
 
     [E2EFact]
@@ -112,7 +133,7 @@ public sealed class SessionFlowTests(ThrowawayDatabase database) : IClassFixture
         [
             new TurnRow
             {
-                Role = TurnRoles.User,
+                Role = TurnRole.User,
                 Text = recognized,
                 WordCount = recognized.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length,
                 PronunciationJson = JsonSerializer.Serialize(phrases),

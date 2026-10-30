@@ -1,15 +1,11 @@
 using Dapper;
 using Microsoft.Data.SqlClient;
-using TutorAI.Api.Practice;
 
 namespace TutorAI.Api.Data;
 
-public sealed class SessionRepository(IConfiguration configuration)
+public sealed class SessionRepository(SqlDatabase database) : ISessionRepository
 {
-    private readonly string _connectionString = configuration.GetConnectionString("TutorAI")
-        ?? throw new InvalidOperationException("ConnectionStrings:TutorAI is not configured.");
-
-    private SqlConnection Open() => new(_connectionString);
+    private SqlConnection Open() => database.Open();
 
     public async Task<bool> PingAsync(CancellationToken ct)
     {
@@ -22,7 +18,7 @@ public sealed class SessionRepository(IConfiguration configuration)
     /// in which case it returns null. The count and insert run as one statement so parallel
     /// requests cannot overshoot the limit.
     /// </summary>
-    public async Task<SessionRow?> CreateSessionAsync(int userId, string mode, string scenarioJson, CancellationToken ct)
+    public async Task<SessionRow?> CreateSessionAsync(int userId, SessionMode mode, string scenarioJson, CancellationToken ct)
     {
         await using var db = Open();
         return await db.QuerySingleOrDefaultAsync<SessionRow>(new CommandDefinition(
@@ -129,13 +125,10 @@ public sealed class SessionRepository(IConfiguration configuration)
             "SELECT * FROM dbo.Assessments WHERE SessionId = @sessionId", new { sessionId }, cancellationToken: ct));
     }
 
-    /// <summary>Replaces the session's assessment and, in the same transaction, adds its practice items.</summary>
-    public async Task<AssessmentRow> SaveAssessmentAsync(AssessmentRow row, CancellationToken ct, PracticeBatch? practice = null)
+    public async Task<AssessmentRow> SaveAssessmentAsync(AssessmentRow row, IUnitOfWork work, CancellationToken ct)
     {
-        await using var db = Open();
-        await db.OpenAsync(ct);
-        await using var transaction = await db.BeginTransactionAsync(ct);
-        var saved = await db.QuerySingleAsync<AssessmentRow>(new CommandDefinition(
+        var sql = work.Sql();
+        return await sql.Connection.QuerySingleAsync<AssessmentRow>(new CommandDefinition(
             """
             DELETE FROM dbo.Assessments WHERE SessionId = @SessionId;
 
@@ -147,21 +140,14 @@ public sealed class SessionRepository(IConfiguration configuration)
                     @Overall, @MetricsJson, @DetailJson, @Model, @PromptVersion,
                     @InputTokens, @OutputTokens, @CacheReadTokens, @CacheWriteTokens);
             """,
-            row, transaction, cancellationToken: ct));
-        if (practice is not null)
-        {
-            await PracticeRepository.UpsertAsync(db, transaction, practice, ct);
-        }
-
-        await transaction.CommitAsync(ct);
-        return saved;
+            row, sql.Transaction, cancellationToken: ct));
     }
 
     /// <summary>
     /// The user's graded sessions (an overall level exists), oldest first: the latest <paramref name="max"/>.
     /// The measurements come from the stored metrics JSON, so no extra columns are needed.
     /// </summary>
-    public async Task<IReadOnlyList<ProgressRow>> GetProgressAsync(int userId, string? mode, int max, CancellationToken ct)
+    public async Task<IReadOnlyList<ProgressRow>> GetProgressAsync(int userId, SessionMode? mode, int max, CancellationToken ct)
     {
         await using var db = Open();
         var rows = await db.QueryAsync<ProgressRow>(new CommandDefinition(
@@ -214,10 +200,10 @@ public sealed class SessionRepository(IConfiguration configuration)
     /// <summary>
     /// Queues the session for grading unless grading is already queued or running. Returns the state afterwards.
     /// </summary>
-    public async Task<string?> QueueGradingAsync(Guid id, CancellationToken ct)
+    public async Task<GradingState?> QueueGradingAsync(Guid id, CancellationToken ct)
     {
         await using var db = Open();
-        return await db.ExecuteScalarAsync<string?>(new CommandDefinition(
+        return await db.QuerySingleOrDefaultAsync<GradingState?>(new CommandDefinition(
             """
             UPDATE dbo.Sessions
             SET GradingState = @pending, GradingAttempts = 0, GradingError = NULL,
@@ -226,7 +212,7 @@ public sealed class SessionRepository(IConfiguration configuration)
 
             SELECT GradingState FROM dbo.Sessions WHERE Id = @id;
             """,
-            new { id, pending = GradingStates.Pending, running = GradingStates.Running }, cancellationToken: ct));
+            new { id, pending = GradingState.Pending, running = GradingState.Running }, cancellationToken: ct));
     }
 
     public async Task SetGradingDoneAsync(Guid id, CancellationToken ct)
@@ -234,7 +220,7 @@ public sealed class SessionRepository(IConfiguration configuration)
         await using var db = Open();
         await db.ExecuteAsync(new CommandDefinition(
             "UPDATE dbo.Sessions SET GradingState = @done, GradingError = NULL, GradingNextAttemptAt = NULL WHERE Id = @id",
-            new { id, done = GradingStates.Done }, cancellationToken: ct));
+            new { id, done = GradingState.Done }, cancellationToken: ct));
     }
 
     /// <summary>
@@ -255,7 +241,7 @@ public sealed class SessionRepository(IConfiguration configuration)
                OR (GradingState = @running AND GradingStartedAt < DATEADD(minute, -@staleMinutes, SYSUTCDATETIME())
                    AND GradingAttempts < @maxAttempts)
             """,
-            new { pending = GradingStates.Pending, running = GradingStates.Running, staleMinutes, maxAttempts },
+            new { pending = GradingState.Pending, running = GradingState.Running, staleMinutes, maxAttempts },
             cancellationToken: ct));
     }
 
@@ -270,7 +256,7 @@ public sealed class SessionRepository(IConfiguration configuration)
             WHERE GradingState = @running AND GradingStartedAt < DATEADD(minute, -@staleMinutes, SYSUTCDATETIME())
               AND GradingAttempts >= @maxAttempts
             """,
-            new { failed = GradingStates.Failed, running = GradingStates.Running, staleMinutes, maxAttempts, error },
+            new { failed = GradingState.Failed, running = GradingState.Running, staleMinutes, maxAttempts, error },
             cancellationToken: ct));
     }
 
@@ -291,11 +277,11 @@ public sealed class SessionRepository(IConfiguration configuration)
                 WHERE GradingState IN (@pending, @running)
             ) jobs
             """,
-            new { pending = GradingStates.Pending, running = GradingStates.Running, staleMinutes }, cancellationToken: ct));
+            new { pending = GradingState.Pending, running = GradingState.Running, staleMinutes }, cancellationToken: ct));
     }
 
     /// <summary>Records a finished attempt, unless another worker has since claimed the job.</summary>
-    public async Task FinishGradingAttemptAsync(GradingClaim claim, string state, string? error, int? retryAfterSeconds, CancellationToken ct)
+    public async Task FinishGradingAttemptAsync(GradingClaim claim, GradingState state, string? error, int? retryAfterSeconds, CancellationToken ct)
     {
         await using var db = Open();
         await db.ExecuteAsync(new CommandDefinition(
@@ -306,7 +292,7 @@ public sealed class SessionRepository(IConfiguration configuration)
                                             ELSE DATEADD(second, @retryAfterSeconds, SYSUTCDATETIME()) END
             WHERE Id = @SessionId AND GradingState = @running AND GradingAttempts = @Attempt
             """,
-            new { claim.SessionId, claim.Attempt, state, error, retryAfterSeconds, running = GradingStates.Running },
+            new { claim.SessionId, claim.Attempt, state, error, retryAfterSeconds, running = GradingState.Running },
             cancellationToken: ct));
     }
 
@@ -320,7 +306,7 @@ public sealed class SessionRepository(IConfiguration configuration)
             SET GradingState = @pending, GradingAttempts = GradingAttempts - 1, GradingStartedAt = NULL
             WHERE Id = @SessionId AND GradingState = @running AND GradingAttempts = @Attempt
             """,
-            new { claim.SessionId, claim.Attempt, pending = GradingStates.Pending, running = GradingStates.Running },
+            new { claim.SessionId, claim.Attempt, pending = GradingState.Pending, running = GradingState.Running },
             cancellationToken: ct));
     }
 }
@@ -358,9 +344,21 @@ public sealed record SessionCursor(DateTime StartedAt, Guid Id)
     }
 }
 
-public sealed record ProgressRow(
-    Guid SessionId, DateTime StartedAt, string Mode, string? Fluency, string? Grammar, string? Vocabulary,
-    string? Interaction, string? Pronunciation, string Overall, double? WordsPerMinute, double? PauseRatio,
-    double? PronunciationScore);
+// A class, not a positional record: Dapper's constructor mapping doesn't apply type handlers (SessionMode).
+public sealed class ProgressRow
+{
+    public Guid SessionId { get; set; }
+    public DateTime StartedAt { get; set; }
+    public SessionMode Mode { get; set; }
+    public string? Fluency { get; set; }
+    public string? Grammar { get; set; }
+    public string? Vocabulary { get; set; }
+    public string? Interaction { get; set; }
+    public string? Pronunciation { get; set; }
+    public string Overall { get; set; } = "";
+    public double? WordsPerMinute { get; set; }
+    public double? PauseRatio { get; set; }
+    public double? PronunciationScore { get; set; }
+}
 
 public sealed record UserModelUsage(int UserId, string Model, long Input, long Output, long CacheRead, long CacheWrite);

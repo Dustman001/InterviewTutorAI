@@ -60,7 +60,7 @@ public class AccentTests
     [Fact]
     public void The_tutor_prompt_names_the_variety_only_when_one_is_chosen()
     {
-        var session = new SessionRow { Mode = SessionModes.Conversation, ScenarioJson = "{}" };
+        var session = new SessionRow { Mode = SessionMode.Conversation, ScenarioJson = "{}" };
         var scenario = new Scenario(Topic: "Travel");
 
         Assert.Contains("Language variety: Use British English vocabulary.", ScenarioPrompts.Build(session, scenario, "Use British English vocabulary."));

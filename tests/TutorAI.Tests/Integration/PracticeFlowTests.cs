@@ -202,10 +202,10 @@ public sealed class PracticeFlowTests(ThrowawayDatabase database) : IClassFixtur
             words[i] = words[i] with { Accuracy = 40, ErrorType = "Mispronunciation" };
         }
 
-        await api.Services.GetRequiredService<SessionRepository>().AddTurnAsync(
+        await api.Services.GetRequiredService<ISessionRepository>().AddTurnAsync(
             new TurnRow
             {
-                SessionId = sessionId, Role = TurnRoles.User, Text = text, WordCount = words.Length,
+                SessionId = sessionId, Role = TurnRole.User, Text = text, WordCount = words.Length,
                 PronunciationJson = JsonSerializer.Serialize(new[] { Phrase(85, 85, null, words) }),
             },
             CancellationToken.None);

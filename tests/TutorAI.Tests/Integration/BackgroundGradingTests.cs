@@ -166,7 +166,7 @@ public sealed class BackgroundGradingTests(ThrowawayDatabase database) : IClassF
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:TutorAI"] = database.ConnectionString })
             .Build();
-        var workers = Enumerable.Range(0, 8).Select(_ => new SessionRepository(configuration)).ToList();
+        var workers = Enumerable.Range(0, 8).Select(_ => new SessionRepository(new SqlDatabase(configuration))).ToList();
 
         var claims = await Task.WhenAll(workers.Select(w => w.ClaimGradingAsync(10, 3, CancellationToken.None)));
 
@@ -191,8 +191,8 @@ public sealed class BackgroundGradingTests(ThrowawayDatabase database) : IClassF
         var sessionId = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
 
         var text = string.Join(' ', Enumerable.Repeat("I went to the market and bought some fresh fruit.", 18));
-        await api.Services.GetRequiredService<SessionRepository>().AddTurnAsync(
-            new TurnRow { SessionId = sessionId, Role = TurnRoles.User, Text = text, WordCount = text.Split(' ').Length },
+        await api.Services.GetRequiredService<ISessionRepository>().AddTurnAsync(
+            new TurnRow { SessionId = sessionId, Role = TurnRole.User, Text = text, WordCount = text.Split(' ').Length },
             CancellationToken.None);
         return sessionId;
     }

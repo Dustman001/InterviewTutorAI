@@ -53,10 +53,10 @@ public sealed class SessionLimitsTests(ThrowawayDatabase database) : IClassFixtu
         await using var api = TestApi.Create(database.ConnectionString, null, ("Sessions:MaxUserTurns", "2"));
         var client = await SignInAsync(api);
         var sessionId = await CreateSessionAsync(client);
-        var repository = api.Services.GetRequiredService<SessionRepository>();
+        var repository = api.Services.GetRequiredService<ISessionRepository>();
         foreach (var text in new[] { "First.", "Second." })
         {
-            await repository.AddTurnAsync(new TurnRow { SessionId = sessionId, Role = TurnRoles.User, Text = text, WordCount = 1 }, CancellationToken.None);
+            await repository.AddTurnAsync(new TurnRow { SessionId = sessionId, Role = TurnRole.User, Text = text, WordCount = 1 }, CancellationToken.None);
         }
 
         var third = await client.PostAsJsonAsync($"/api/sessions/{sessionId}/turns", new { text = "Third." });

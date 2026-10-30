@@ -272,8 +272,9 @@ npm install
 npm run dev                                            # http://localhost:3000
 ```
 
-Tests: `dotnet test` runs the unit tests. With the SQL container up, `$env:TUTORAI_E2E = "1"` also runs
-the integration tests against throwaway databases. Tests that call Claude or Azure Speech run only when
+Tests: `dotnet test` runs the unit tests, including the turn and grading services against in-memory fakes of
+the repository interfaces (`tests/TutorAI.Tests/Services`). With the SQL container up, `$env:TUTORAI_E2E = "1"`
+also runs the integration tests against throwaway databases. Tests that call Claude or Azure Speech run only when
 those keys are in user-secrets. CI (`.github/workflows/ci.yml`) runs the unit and integration tests
 against a SQL Server service container, without Claude or Speech keys. It also lints, type-checks,
 unit-tests and builds the web app.

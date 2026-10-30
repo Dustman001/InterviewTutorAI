@@ -7,7 +7,7 @@ namespace TutorAI.Api.Endpoints;
 
 /// <param name="DueAt">Null once mastered.</param>
 public sealed record PracticeItemDto(
-    long Id, string Kind, string Target, string? Original, string? Explanation, string? Locale, int Box,
+    long Id, PracticeKind Kind, string Target, string? Original, string? Explanation, string? Locale, int Box,
     DateTime? DueAt, int Attempts, double? LastScore, double? BestScore, Guid? SessionId);
 
 /// <param name="Items">Due items, longest overdue first, up to the requested limit.</param>
@@ -31,7 +31,7 @@ public static class PracticeEndpoints
         var practice = app.MapGroup("/api/practice");
 
         practice.MapGet("/due", async (
-            ClaimsPrincipal user, PracticeRepository repository, TimeProvider clock, int? limit, CancellationToken ct) =>
+            ClaimsPrincipal user, IPracticeRepository repository, TimeProvider clock, int? limit, CancellationToken ct) =>
         {
             var now = clock.GetUtcNow().UtcDateTime;
             var take = Math.Clamp(limit ?? DefaultDueLimit, 0, MaxDueLimit);
@@ -43,7 +43,7 @@ public static class PracticeEndpoints
 
         // The score is computed here from Azure's raw result; a pass moves the item up a box.
         practice.MapPost("/{id:long}/attempts", async (
-            long id, PracticeAttemptRequest request, ClaimsPrincipal user, PracticeRepository repository,
+            long id, PracticeAttemptRequest request, ClaimsPrincipal user, IPracticeRepository repository,
             TimeProvider clock, CancellationToken ct) =>
         {
             if (await repository.GetAsync(id, user.UserId(), ct) is not { } item)
@@ -65,7 +65,7 @@ public static class PracticeEndpoints
                     result.Score, result.Score >= PracticeSchedule.PassScore, result.Words, ToDto(updated)));
         }).RequireRateLimiting(SessionEndpoints.TurnsPolicy);
 
-        practice.MapDelete("/{id:long}", async (long id, ClaimsPrincipal user, PracticeRepository repository, CancellationToken ct) =>
+        practice.MapDelete("/{id:long}", async (long id, ClaimsPrincipal user, IPracticeRepository repository, CancellationToken ct) =>
             await repository.DeleteAsync(id, user.UserId(), ct) ? Results.NoContent() : Results.NotFound());
     }
 

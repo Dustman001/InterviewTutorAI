@@ -17,11 +17,11 @@ public sealed class TutorCachingTests(ThrowawayDatabase database) : IClassFixtur
     public async Task Each_turn_reads_the_earlier_conversation_from_the_cache()
     {
         await using var api = TestApi.Create(database.ConnectionString);
-        var chat = api.Services.GetRequiredService<TutorChat>();
+        var chat = api.Services.GetRequiredService<ITutorChat>();
         var session = new SessionRow
         {
             Id = Guid.NewGuid(),
-            Mode = SessionModes.Conversation,
+            Mode = SessionMode.Conversation,
             // A topic unique to this run, so a cache warmed by an earlier run can't answer turn 1.
             ScenarioJson = JsonSerializer.Serialize(
                 new Scenario(Topic: $"Travel (test run {Guid.NewGuid():N})", DurationMinutes: 10), JsonSerializerOptions.Web),
@@ -78,7 +78,7 @@ public sealed class TutorCachingTests(ThrowawayDatabase database) : IClassFixtur
         {
             if (learner is not null)
             {
-                turns.Add(new TurnRow { Role = TurnRoles.User, Text = learner, StartedAt = DateTime.UtcNow });
+                turns.Add(new TurnRow { Role = TurnRole.User, Text = learner, StartedAt = DateTime.UtcNow });
             }
 
             var usage = new ClaudeUsage();
@@ -89,7 +89,7 @@ public sealed class TutorCachingTests(ThrowawayDatabase database) : IClassFixtur
             }
 
             Assert.False(string.IsNullOrWhiteSpace(reply.ToString()));
-            turns.Add(new TurnRow { Role = TurnRoles.Tutor, Text = reply.ToString().Trim(), StartedAt = DateTime.UtcNow });
+            turns.Add(new TurnRow { Role = TurnRole.Tutor, Text = reply.ToString().Trim(), StartedAt = DateTime.UtcNow });
             usages.Add(usage);
         }
 

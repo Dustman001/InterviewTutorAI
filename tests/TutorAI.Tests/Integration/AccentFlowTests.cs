@@ -61,7 +61,7 @@ public sealed class AccentFlowTests(ThrowawayDatabase database) : IClassFixture<
         [
             new TurnRow
             {
-                Role = TurnRoles.User,
+                Role = TurnRole.User,
                 Text = recognized,
                 WordCount = recognized.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length,
                 PronunciationJson = JsonSerializer.Serialize(phrases),

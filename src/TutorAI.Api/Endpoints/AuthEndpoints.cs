@@ -27,7 +27,7 @@ public static class AuthEndpoints
         var auth = app.MapGroup("/api/auth");
 
         auth.MapPost("/login", async (
-            LoginRequest request, HttpContext http, UserSeeder seeder, UserRepository users, IPasswordHasher<UserRow> hasher,
+            LoginRequest request, HttpContext http, UserSeeder seeder, IUserRepository users, IPasswordHasher<UserRow> hasher,
             TokenService tokens, IOptions<AuthOptions> auth, TimeProvider clock, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrEmpty(request.Password))
@@ -74,7 +74,7 @@ public static class AuthEndpoints
 
         // A new token for a still-valid one. The web app calls this while the user is active, so the short
         // token lifetime acts as an idle timeout. Disabled or signed-out users fail token validation first.
-        auth.MapPost("/refresh", async (ClaimsPrincipal principal, UserRepository users, TokenService tokens, CancellationToken ct) =>
+        auth.MapPost("/refresh", async (ClaimsPrincipal principal, IUserRepository users, TokenService tokens, CancellationToken ct) =>
         {
             if (await users.GetByIdAsync(principal.UserId(), ct) is not { } user)
             {
@@ -88,7 +88,7 @@ public static class AuthEndpoints
         // Change your own password. The current one is checked like a sign-in (a wrong one counts toward the
         // lockout). Every other session is signed out; this one gets a fresh token so it stays signed in.
         auth.MapPost("/password", async (
-            ChangePasswordRequest request, ClaimsPrincipal principal, HttpContext http, UserRepository users,
+            ChangePasswordRequest request, ClaimsPrincipal principal, HttpContext http, IUserRepository users,
             IPasswordHasher<UserRow> hasher, TokenService tokens, IOptions<AuthOptions> auth, TimeProvider clock,
             CancellationToken ct) =>
         {
@@ -133,7 +133,7 @@ public static class AuthEndpoints
             return Results.Ok(new LoginResponse(token.Token, token.ExpiresAt, await ToDtoAsync(updated, users, ct)));
         }).RequireRateLimiting(LoginPolicy);
 
-        auth.MapGet("/me", async (ClaimsPrincipal principal, UserRepository users, CancellationToken ct) =>
+        auth.MapGet("/me", async (ClaimsPrincipal principal, IUserRepository users, CancellationToken ct) =>
             await users.GetByIdAsync(principal.UserId(), ct) is { } user
                 ? Results.Ok(await ToDtoAsync(user, users, ct))
                 : Results.Unauthorized());
@@ -149,6 +149,6 @@ public static class AuthEndpoints
             statusCode: StatusCodes.Status429TooManyRequests);
     }
 
-    internal static async Task<UserDto> ToDtoAsync(UserRow user, UserRepository users, CancellationToken ct) =>
+    internal static async Task<UserDto> ToDtoAsync(UserRow user, IUserRepository users, CancellationToken ct) =>
         new(user.Username, user.Role, user.SessionLimit, await users.CountSessionsAsync(user.Id, ct));
 }

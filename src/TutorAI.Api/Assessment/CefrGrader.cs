@@ -226,7 +226,7 @@ public sealed class CefrGrader(
         sb.AppendLine("Transcript:");
         foreach (var turn in turns)
         {
-            sb.Append(turn.Role == TurnRoles.User ? "LEARNER: " : "TUTOR: ").AppendLine(turn.Text.Trim());
+            sb.Append(turn.Role == TurnRole.User ? "LEARNER: " : "TUTOR: ").AppendLine(turn.Text.Trim());
         }
 
         return sb.ToString();

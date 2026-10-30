@@ -51,8 +51,8 @@ public class PracticeSeedTests
 
         Assert.Collection(
             seeds,
-            c => Assert.Equal((PracticeKinds.Correction, "We went to the market.", "we went to the market", "we was going"), (c.Kind, c.Target, c.TargetKey, c.Original)),
-            w => Assert.Equal((PracticeKinds.Word, "thought", "Scored 41 out of 100 in your session."), (w.Kind, w.Target, w.Explanation)));
+            c => Assert.Equal((PracticeKind.Correction, "We went to the market.", "we went to the market", "we was going"), (c.Kind, c.Target, c.TargetKey, c.Original)),
+            w => Assert.Equal((PracticeKind.Word, "thought", "Scored 41 out of 100 in your session."), (w.Kind, w.Target, w.Explanation)));
     }
 
     [Fact]

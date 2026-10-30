@@ -1,36 +1,64 @@
-using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace TutorAI.Api.Data;
 
-public static class SessionModes
+[JsonConverter(typeof(StringValueJsonConverter<SessionMode>))]
+public readonly record struct SessionMode : IStringValue<SessionMode>
 {
-    public const string Conversation = "Conversation";
-    public const string Interview = "Interview";
+    public static readonly SessionMode Conversation = new("Conversation");
+    public static readonly SessionMode Interview = new("Interview");
 
-    public static bool IsValid(string? mode) => mode is Conversation or Interview;
+    private SessionMode(string value) => Value = value;
+
+    public string Value { get; }
+    public static IReadOnlyList<SessionMode> All { get; } = [Conversation, Interview];
+    public override string ToString() => Value;
 }
 
-public static class SessionStatus
+[JsonConverter(typeof(StringValueJsonConverter<SessionStatus>))]
+public readonly record struct SessionStatus : IStringValue<SessionStatus>
 {
-    public const string Active = "Active";
-    public const string Ended = "Ended";
+    public static readonly SessionStatus Active = new("Active");
+    public static readonly SessionStatus Ended = new("Ended");
+
+    private SessionStatus(string value) => Value = value;
+
+    public string Value { get; }
+    public static IReadOnlyList<SessionStatus> All { get; } = [Active, Ended];
+    public override string ToString() => Value;
 }
 
 /// <summary>Where a session's background grading stands (Sessions.GradingState). NULL: never queued.</summary>
-public static class GradingStates
+[JsonConverter(typeof(StringValueJsonConverter<GradingState>))]
+public readonly record struct GradingState : IStringValue<GradingState>
 {
-    public const string Pending = "Pending";
-    public const string Running = "Running";
-    public const string Done = "Done";
-    public const string Failed = "Failed";
+    public static readonly GradingState Pending = new("Pending");
+    public static readonly GradingState Running = new("Running");
+    public static readonly GradingState Done = new("Done");
+    public static readonly GradingState Failed = new("Failed");
 
-    public static bool InProgress(string? state) => state is Pending or Running;
+    private GradingState(string value) => Value = value;
+
+    public string Value { get; }
+    public static IReadOnlyList<GradingState> All { get; } = [Pending, Running, Done, Failed];
+
+    /// <summary>Queued or being graded now.</summary>
+    public bool InProgress => this == Pending || this == Running;
+
+    public override string ToString() => Value;
 }
 
-public static class TurnRoles
+[JsonConverter(typeof(StringValueJsonConverter<TurnRole>))]
+public readonly record struct TurnRole : IStringValue<TurnRole>
 {
-    public const string User = "user";
-    public const string Tutor = "tutor";
+    public static readonly TurnRole User = new("user");
+    public static readonly TurnRole Tutor = new("tutor");
+
+    private TurnRole(string value) => Value = value;
+
+    public string Value { get; }
+    public static IReadOnlyList<TurnRole> All { get; } = [User, Tutor];
+    public override string ToString() => Value;
 }
 
 public sealed record Scenario(
@@ -44,22 +72,17 @@ public sealed record Scenario(
     /// <summary>A locale from AzureSpeech:Accents, e.g. en-GB. Null: the default accent.</summary>
     string? Accent = null);
 
-public sealed record CreateSessionRequest(string Mode, Scenario? Scenario);
-
-/// <param name="Phrases">Raw Azure Speech detailed-result JSON, one object per recognized phrase of the turn.</param>
-public sealed record TurnRequest(string? Text, int? DurationMs, JsonElement[]? Phrases);
-
 public sealed class SessionRow
 {
     public Guid Id { get; set; }
-    public string Mode { get; set; } = "";
+    public SessionMode Mode { get; set; } = SessionMode.Conversation;
     public string ScenarioJson { get; set; } = "{}";
     public DateTime StartedAt { get; set; }
     public DateTime? EndedAt { get; set; }
-    public string Status { get; set; } = SessionStatus.Active;
+    public SessionStatus Status { get; set; } = SessionStatus.Active;
     /// <summary>NULL for sessions created before sign-in existed.</summary>
     public int? UserId { get; set; }
-    public string? GradingState { get; set; }
+    public GradingState? GradingState { get; set; }
     public int GradingAttempts { get; set; }
     public string? GradingError { get; set; }
     public DateTime? GradingStartedAt { get; set; }
@@ -71,7 +94,7 @@ public sealed class TurnRow
     public long Id { get; set; }
     public Guid SessionId { get; set; }
     public int Seq { get; set; }
-    public string Role { get; set; } = "";
+    public TurnRole Role { get; set; } = TurnRole.User;
     public string Text { get; set; } = "";
     public DateTime StartedAt { get; set; }
     public int? DurationMs { get; set; }
@@ -114,12 +137,12 @@ public sealed class AssessmentRow
 public sealed class SessionListRow
 {
     public Guid Id { get; set; }
-    public string Mode { get; set; } = "";
+    public SessionMode Mode { get; set; }
     public string ScenarioJson { get; set; } = "{}";
     public DateTime StartedAt { get; set; }
     public DateTime? EndedAt { get; set; }
-    public string Status { get; set; } = "";
-    public string? GradingState { get; set; }
+    public SessionStatus Status { get; set; }
+    public GradingState? GradingState { get; set; }
     public string? Fluency { get; set; }
     public string? Grammar { get; set; }
     public string? Vocabulary { get; set; }

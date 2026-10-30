@@ -30,7 +30,7 @@ public static class ScenarioPrompts
     public static string Build(SessionRow session, Scenario scenario, string? varietyNote = null)
     {
         var sb = new StringBuilder();
-        if (session.Mode == SessionModes.Interview)
+        if (session.Mode == SessionMode.Interview)
         {
             var role = Value(scenario.Role, "a professional role the candidate describes");
             sb.AppendLine(

@@ -8,7 +8,7 @@ namespace TutorAI.Api.Endpoints;
 public sealed record ProgressPointDto(
     Guid SessionId,
     DateTime StartedAt,
-    string Mode,
+    SessionMode Mode,
     string? Fluency,
     string? Grammar,
     string? Vocabulary,
@@ -30,7 +30,7 @@ public static class ProgressEndpoints
     {
         // A user's graded sessions over time. Admins may pass any userId; everyone else only their own.
         app.MapGet("/api/progress", async (
-            string? mode, int? userId, ClaimsPrincipal principal, SessionRepository sessions, UserRepository users,
+            string? mode, int? userId, ClaimsPrincipal principal, ISessionRepository sessions, IUserRepository users,
             CancellationToken ct) =>
         {
             var self = principal.UserId();
@@ -40,9 +40,15 @@ public static class ProgressEndpoints
                 return Results.Json(new { error = "You can only see your own progress." }, statusCode: StatusCodes.Status403Forbidden);
             }
 
-            if (mode is not null && !SessionModes.IsValid(mode))
+            SessionMode? sessionMode = null;
+            if (mode is not null)
             {
-                return Results.BadRequest(new { error = $"Mode must be '{SessionModes.Conversation}' or '{SessionModes.Interview}'." });
+                if (!StringValue.TryParse<SessionMode>(mode, out var parsed))
+                {
+                    return Results.BadRequest(new { error = $"Mode must be {StringValue.Describe<SessionMode>()}." });
+                }
+
+                sessionMode = parsed;
             }
 
             if (await users.GetByIdAsync(target, ct) is not { } user)
@@ -50,7 +56,7 @@ public static class ProgressEndpoints
                 return Results.NotFound();
             }
 
-            var rows = await sessions.GetProgressAsync(target, mode, MaxPoints, ct);
+            var rows = await sessions.GetProgressAsync(target, sessionMode, MaxPoints, ct);
             return Results.Ok(new ProgressDto(user.Id, user.Username, [.. rows.Select(r => new ProgressPointDto(
                 r.SessionId, DateTime.SpecifyKind(r.StartedAt, DateTimeKind.Utc), r.Mode,
                 r.Fluency, r.Grammar, r.Vocabulary, r.Interaction, r.Pronunciation, r.Overall,

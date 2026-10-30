@@ -189,9 +189,9 @@ public class SessionMetricsTests
         var json = JsonSerializer.Serialize(new[] { Phrase(80, 80, 80, Words(4)) });
         List<TurnRow> turns =
         [
-            new() { Role = TurnRoles.Tutor, Text = "Hello there, how are you today?", WordCount = 6 },
-            new() { Role = TurnRoles.User, Text = "word0 word1 word2 word3", WordCount = 4, PronunciationJson = json },
-            new() { Role = TurnRoles.User, Text = "typed answer here", WordCount = 3 },
+            new() { Role = TurnRole.Tutor, Text = "Hello there, how are you today?", WordCount = 6 },
+            new() { Role = TurnRole.User, Text = "word0 word1 word2 word3", WordCount = 4, PronunciationJson = json },
+            new() { Role = TurnRole.User, Text = "typed answer here", WordCount = 3 },
         ];
 
         var metrics = AssessmentService.ComputeMetrics(turns);
