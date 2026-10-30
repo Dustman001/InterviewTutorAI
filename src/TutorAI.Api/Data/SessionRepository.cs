@@ -171,27 +171,34 @@ public sealed class SessionRepository(SqlDatabase database) : ISessionRepository
         return rows.AsList();
     }
 
-    /// <summary>Claude tokens per user and model since <paramref name="since"/>: tutor turns plus assessments.</summary>
+    /// <summary>Claude tokens per user and model since <paramref name="since"/>: tutor turns, assessments and prep runs.</summary>
     public async Task<IReadOnlyList<UserModelUsage>> GetUsageByUserAsync(DateTime since, CancellationToken ct)
     {
         await using var db = Open();
         var rows = await db.QueryAsync<UserModelUsage>(new CommandDefinition(
             """
-            SELECT s.UserId, x.Model,
-                   SUM(CAST(ISNULL(x.InputTokens, 0) AS BIGINT)) AS Input,
-                   SUM(CAST(ISNULL(x.OutputTokens, 0) AS BIGINT)) AS Output,
-                   SUM(CAST(ISNULL(x.CacheReadTokens, 0) AS BIGINT)) AS CacheRead,
-                   SUM(CAST(ISNULL(x.CacheWriteTokens, 0) AS BIGINT)) AS CacheWrite
+            SELECT u.UserId, u.Model,
+                   SUM(CAST(ISNULL(u.InputTokens, 0) AS BIGINT)) AS Input,
+                   SUM(CAST(ISNULL(u.OutputTokens, 0) AS BIGINT)) AS Output,
+                   SUM(CAST(ISNULL(u.CacheReadTokens, 0) AS BIGINT)) AS CacheRead,
+                   SUM(CAST(ISNULL(u.CacheWriteTokens, 0) AS BIGINT)) AS CacheWrite
             FROM (
-                SELECT SessionId, Model, InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens
-                FROM dbo.Turns WHERE Model IS NOT NULL AND StartedAt >= @since
+                SELECT s.UserId, x.Model, x.InputTokens, x.OutputTokens, x.CacheReadTokens, x.CacheWriteTokens
+                FROM (
+                    SELECT SessionId, Model, InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens
+                    FROM dbo.Turns WHERE Model IS NOT NULL AND StartedAt >= @since
+                    UNION ALL
+                    SELECT SessionId, Model, InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens
+                    FROM dbo.Assessments WHERE Model IS NOT NULL AND InputTokens IS NOT NULL AND CreatedAt >= @since
+                ) x
+                JOIN dbo.Sessions s ON s.Id = x.SessionId
+                WHERE s.UserId IS NOT NULL
                 UNION ALL
-                SELECT SessionId, Model, InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens
-                FROM dbo.Assessments WHERE Model IS NOT NULL AND InputTokens IS NOT NULL AND CreatedAt >= @since
-            ) x
-            JOIN dbo.Sessions s ON s.Id = x.SessionId
-            WHERE s.UserId IS NOT NULL
-            GROUP BY s.UserId, x.Model
+                -- Interview-prep agent runs
+                SELECT UserId, Model, InputTokens, OutputTokens, 0, 0
+                FROM dbo.PrepRuns WHERE Model IS NOT NULL AND CreatedAt >= @since
+            ) u
+            GROUP BY u.UserId, u.Model
             """,
             new { since }, cancellationToken: ct));
         return rows.AsList();

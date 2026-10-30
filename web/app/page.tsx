@@ -106,6 +106,7 @@ export default function Home() {
               : ` · ${sessionsLeft} of ${user.sessionLimit} sessions left`}
           </span>
           <span className="userbar-actions">
+            <Link href="/prep">Interview prep</Link>
             <Link href="/practice">Practice</Link>
             <Link href="/progress">Progress</Link>
             <Link href="/account">Account</Link>

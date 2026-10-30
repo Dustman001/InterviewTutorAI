@@ -70,7 +70,9 @@ public sealed record Scenario(
     string? Difficulty = null,
     int DurationMinutes = 10,
     /// <summary>A locale from AzureSpeech:Accents, e.g. en-GB. Null: the default accent.</summary>
-    string? Accent = null);
+    string? Accent = null,
+    /// <summary>Interview questions to work through, e.g. planned by the prep agent for a drill. Null: the interviewer improvises.</summary>
+    IReadOnlyList<string>? Questions = null);
 
 public sealed class SessionRow
 {

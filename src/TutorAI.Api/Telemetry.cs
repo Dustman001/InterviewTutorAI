@@ -15,12 +15,13 @@ public static class Telemetry
 
     public const string ChatRoute = "chat";
     public const string GradeRoute = "grade";
+    public const string PrepRoute = "prep";
 
     public static readonly ActivitySource Source = new(Name);
     public static readonly Meter Meter = new(Name);
 
     private static readonly Counter<long> ClaudeTokens = Meter.CreateCounter<long>(
-        "tutorai.claude.tokens", "{token}", "Claude tokens, tagged by model, kind (input, output, cache_read, cache_write) and route (chat, grade).");
+        "tutorai.claude.tokens", "{token}", "Claude tokens, tagged by model, kind (input, output, cache_read, cache_write) and route (chat, grade, prep).");
 
     public static readonly Histogram<double> TurnFirstTokenMs = Meter.CreateHistogram<double>(
         "tutorai.turn.first_token_ms", "ms", "Time from sending a tutor turn request to Claude's first text.");

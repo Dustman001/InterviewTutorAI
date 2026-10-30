@@ -12,6 +12,8 @@ export interface Scenario {
   durationMinutes: number;
   /** A locale from GET /api/speech/accents, e.g. "en-GB". Missing: the default accent. */
   accent?: string | null;
+  /** Interview questions to work through (a drill planned by the prep agent). */
+  questions?: string[] | null;
 }
 
 export interface AccentChoice {
@@ -284,9 +286,12 @@ export const api = {
   me: () => request<CurrentUser>("/api/auth/me"),
 };
 
+/** correction and word come from graded sessions; phrase from the interview-prep agent. */
+export type PracticeKind = "correction" | "word" | "phrase";
+
 export interface PracticeItem {
   id: number;
-  kind: "correction" | "word";
+  kind: PracticeKind;
   /** What to read aloud. */
   target: string;
   /** Corrections: what the learner said. */
@@ -328,6 +333,95 @@ export const practice = {
     request<PracticeAttempt>(`/api/practice/${id}/attempts`, { method: "POST", body: JSON.stringify({ phrases }) }),
   remove: (id: number) => request<void>(`/api/practice/${id}`, { method: "DELETE" }),
 };
+
+export type PrepRunStatus = "Running" | "Completed" | "Stopped" | "Failed";
+export type PrepActionStatus = "Applied" | "PendingConfirmation" | "Confirmed" | "Rejected";
+export type DrillStatus = "Scheduled" | "Started" | "Cancelled";
+
+export interface PlannedQuestion {
+  question: string;
+  focus: string;
+  why: string;
+}
+
+/** One write the agent made (Applied) or proposed for confirmation. args and result are the tool's JSON. */
+export interface PrepAction {
+  id: number;
+  tool: string;
+  status: PrepActionStatus;
+  args: Record<string, unknown>;
+  result: Record<string, unknown> | null;
+  createdAt: string;
+  decidedAt: string | null;
+}
+
+export interface Drill {
+  id: string;
+  runId: string | null;
+  scheduledFor: string;
+  status: DrillStatus;
+  scenario: Scenario;
+  sessionId: string | null;
+}
+
+export interface PrepRun {
+  id: string;
+  status: PrepRunStatus;
+  /** Why a Stopped or Failed run ended early. */
+  stopReason: string | null;
+  summary: string | null;
+  jobDescription: string;
+  role: string | null;
+  seniority: string | null;
+  questions: PlannedQuestion[];
+  actions: PrepAction[];
+  drills: Drill[];
+  model: string | null;
+  steps: number;
+  inputTokens: number;
+  outputTokens: number;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface PrepRunSummary {
+  id: string;
+  status: PrepRunStatus;
+  role: string | null;
+  seniority: string | null;
+  summary: string | null;
+  createdAt: string;
+}
+
+export interface McpToken {
+  token: string;
+  expiresAt: string;
+  /** The MCP endpoint's path on the API host, "/mcp". */
+  path: string;
+}
+
+/** The interview-prep agent. */
+export const prep = {
+  /** Runs the agent to the end (up to about two minutes). The key makes a retried click return the same run. */
+  run: (input: { jobDescription: string; role?: string; seniority?: string }, idempotencyKey: string) =>
+    request<PrepRun>("/api/prep/runs", {
+      method: "POST",
+      body: JSON.stringify(input),
+      headers: { "Idempotency-Key": idempotencyKey },
+    }),
+  runs: () => request<PrepRunSummary[]>("/api/prep/runs"),
+  get: (id: string) => request<PrepRun>(`/api/prep/runs/${id}`),
+  confirm: (runId: string, actionId: number) =>
+    request<PrepAction>(`/api/prep/runs/${runId}/actions/${actionId}/confirm`, { method: "POST" }),
+  reject: (runId: string, actionId: number) =>
+    request<PrepAction>(`/api/prep/runs/${runId}/actions/${actionId}/reject`, { method: "POST" }),
+  drills: () => request<Drill[]>("/api/prep/drills"),
+  startDrill: (id: string) => request<{ sessionId: string }>(`/api/prep/drills/${id}/start`, { method: "POST" }),
+  cancelDrill: (id: string) => request<void>(`/api/prep/drills/${id}/cancel`, { method: "POST" }),
+};
+
+/** A read-only token for MCP clients (Claude, Copilot), valid for 30 days. */
+export const mcpToken = () => request<McpToken>("/api/auth/mcp-token", { method: "POST" });
 
 /** Admin-only user management. */
 export const users = {

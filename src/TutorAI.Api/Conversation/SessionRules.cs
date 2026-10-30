@@ -36,9 +36,25 @@ public static class SessionRules
             }
         }
 
-        return scenario.JobDescription?.Length > limits.MaxJobDescriptionChars
-            ? $"The job description can be at most {limits.MaxJobDescriptionChars} characters."
-            : null;
+        if (scenario.JobDescription?.Length > limits.MaxJobDescriptionChars)
+        {
+            return $"The job description can be at most {limits.MaxJobDescriptionChars} characters.";
+        }
+
+        if (scenario.Questions is { } questions)
+        {
+            if (questions.Count > limits.MaxQuestions)
+            {
+                return $"A session can have at most {limits.MaxQuestions} planned questions.";
+            }
+
+            if (questions.Any(q => string.IsNullOrWhiteSpace(q) || q.Length > limits.MaxQuestionChars))
+            {
+                return $"Each planned question must have 1 to {limits.MaxQuestionChars} characters.";
+            }
+        }
+
+        return null;
     }
 
     /// <param name="turns">The session's stored turns, before this one.</param>

@@ -1,0 +1,49 @@
+name: Agent evals
+
+# On demand only: each run calls Claude once per case (about $1.25 for the 25 cases with Sonnet).
+# Needs the repository secret ANTHROPIC_API_KEY.
+on:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: Run only cases whose id contains this text (empty for all)
+        required: false
+        default: ""
+      repeats:
+        description: Runs per case
+        required: false
+        default: "1"
+      bar:
+        description: Share of checks that must pass
+        required: false
+        default: "0.9"
+
+jobs:
+  evals:
+    name: Interview-prep agent evals
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DOTNET_NOLOGO: "1"
+      TUTORAI_AGENT_EVALS: "1"
+      TUTORAI_AGENT_EVALS_FILTER: ${{ inputs.filter }}
+      TUTORAI_AGENT_EVALS_REPEATS: ${{ inputs.repeats }}
+      TUTORAI_AGENT_EVALS_BAR: ${{ inputs.bar }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet restore
+      - run: dotnet build --no-restore --configuration Release
+      - run: >-
+          dotnet test tests/TutorAI.Tests --no-build --configuration Release --filter Category=AgentEval
+          --logger "console;verbosity=detailed"
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-evals-report
+          path: tests/TutorAI.Tests/bin/Release/net10.0/TestResults/agent-evals/*.md
+          if-no-files-found: warn

@@ -2,7 +2,8 @@
 
 A speaking tutor: the learner talks with Claude in a conversation or mock interview, Azure AI Speech
 handles speech-to-text, text-to-speech and pronunciation scoring, and at the end the session is graded
-on the CEFR scale.
+on the CEFR scale. An interview-prep agent plans practice from a job description, and an MCP server
+lets Claude or Copilot read the learner's progress.
 
 | Part | Path | Tech |
 | --- | --- | --- |
@@ -10,6 +11,41 @@ on the CEFR scale.
 | Database migrations | `src/TutorAI.Migrations` | DbUp console app (journals to `dbo.SchemaVersions`) |
 | Web front end | `web` | Next.js 16 (proxies `/api/*` to the API) |
 | Tests | `tests/TutorAI.Tests` | xUnit (integration tests gated by `TUTORAI_E2E=1`) |
+
+## Design decisions
+
+- **Model vs code.** Claude makes the judgement calls: the tutor's replies, the CEFR levels for fluency,
+  grammar, vocabulary and interaction, and the prep agent's choice of questions, phrases and tool calls.
+  Code does everything that has to be exact, repeatable or safe: the pronunciation level and the overall
+  median ([CefrMapper](src/TutorAI.Api/Assessment/CefrMapper.cs)), practice scoring and scheduling
+  ([Practice.cs](src/TutorAI.Api/Practice/Practice.cs)), checking browser-sent scores
+  ([TurnScoreCheck](src/TutorAI.Api/Assessment/TurnScoreCheck.cs)), and every write the agent makes. The
+  agent's tools validate their arguments, touch only the caller's own data, and return errors to the
+  model so it can correct itself ([PrepTools](src/TutorAI.Api/Prep/PrepTools.cs)).
+- **Failure handling.** Grading runs in a durable background queue with retries and recovers jobs from a
+  dead instance ([GradingWorker](src/TutorAI.Api/Assessment/GradingWorker.cs)). Every agent write is
+  recorded under an idempotency key, so a repeated call writes once; a retried `POST /api/prep/runs`
+  with the same `Idempotency-Key` returns the first run. Irreversible actions are only proposed, and
+  run after the learner confirms them ([PrepService](src/TutorAI.Api/Prep/PrepService.cs)). A run that
+  fails or hits a limit is still recorded, with what it did before it stopped
+  ([PrepAgent](src/TutorAI.Api/Prep/PrepAgent.cs)).
+- **Limits.** Each session has a length, turn count, turn size and turn rate cap
+  ([SessionRules](src/TutorAI.Api/Conversation/SessionRules.cs)), and guests have a session allowance.
+  Each agent run has a step limit, a token budget and a time limit
+  ([AgentBudget](src/TutorAI.Api/Prep/AgentBudget.cs)); guests get 3 runs a day. Sign-in has lockout and
+  rate limits ([Program.cs](src/TutorAI.Api/Program.cs)).
+- **Evals.** The grader is checked against teachers' ratings
+  ([Calibration](tests/TutorAI.Tests/Calibration)). The prep agent has 25 eval cases, from ordinary
+  postings to prompt injection and non-job input, run against Claude on demand locally or in CI
+  ([AgentEvals](tests/TutorAI.Tests/AgentEvals), [agent-evals.yml](.github/workflows/agent-evals.yml)).
+  Its guards are unit-tested with a scripted model, so CI checks them on every push
+  ([PrepAgentTests](tests/TutorAI.Tests/Services/PrepAgentTests.cs)).
+- **Tracing.** OpenTelemetry to Application Insights: a span per Claude call, a span per agent run with
+  one per model call and per tool call, and token metrics by model and route
+  ([Telemetry](src/TutorAI.Api/Telemetry.cs)). Token counts are also stored with every turn, assessment
+  and agent run, so cost per user doesn't depend on telemetry retention.
+
+The Azure deployment guide is in [docs/deployment.md](docs/deployment.md).
 
 ## Configuration and secrets
 
@@ -27,6 +63,8 @@ goes in `appsettings.json` or App Service app settings.
 | `AzureSpeech:Region` | no | – | App setting `AzureSpeech__Region` |
 | `Anthropic:ConversationModel` / `GradingModel` | no | – | `appsettings.json` (override with app settings if needed) |
 | `Auth:AdminUsername` / `TokenLifetimeMinutes` | no | – | `appsettings.json` (`admin`, `15`) |
+| `Auth:McpTokenDays` | no | – | `appsettings.json` default `30` (see [MCP server](#mcp-server)) |
+| `Prep:Model`, `MaxSteps`, `MaxTokens`, `RunTimeoutSeconds`, `RunsPerDay` | no | – | `appsettings.json` (see [Interview-prep agent](#interview-prep-agent)) |
 | `AzureSpeech:Accents` | no | – | `appsettings.json` (see [Accents](#accents)) |
 | `Assessment:CacheGraderPrompt` | no | – | Off. Caches the grader's prompt; only worth it for back-to-back gradings (see [Grading calibration](#grading-calibration)) |
 
@@ -118,7 +156,7 @@ These bound what a single session can cost. Settings are in the `Sessions` secti
 The tutor's replies use prompt caching. Each turn reads the scenario prompt and the conversation so
 far from Claude's cache (5-minute lifetime, renewed by every turn), so only the newest messages are
 billed at the full input price. Token counts, including cache reads and writes, are stored with each
-tutor turn and assessment (see [Monitoring and cost](#monitoring-and-cost)).
+tutor turn and assessment (see [Monitoring and cost](docs/deployment.md#monitoring-and-cost)).
 
 ## How sessions are evaluated
 
@@ -252,6 +290,84 @@ No rated samples are checked in yet; around 30-50 sessions spread across A2-C1 a
 assessment stores the grader's `PromptVersion` (`CefrGrader.CurrentPromptVersion`). Change that constant
 whenever the prompt changes, so stored grades can be traced and calibration results compared.
 
+## Interview-prep agent
+
+**Interview prep** (`/prep`, from the user bar) takes a job description and runs an agent built with
+Microsoft Agent Framework over Claude (`Prep:Model`, Sonnet). Code: `src/TutorAI.Api/Prep`.
+
+The agent reads the learner's weak areas, picks the questions an interviewer for that job would ask,
+adds phrases to the practice list and schedules a mock-interview drill. Its tools:
+
+| Tool | Effect |
+| --- | --- |
+| `get_weak_areas` | Reads the latest graded sessions (levels, advice, corrections) and the practice items |
+| `plan_questions` | Stores 3-8 questions for the run |
+| `add_practice_items` | Adds `phrase` practice items; ones the learner already has are skipped, never merged |
+| `schedule_drill` | Schedules an interview drill that asks the planned questions |
+| `restart_practice_item` | Proposes sending a mastered or advanced item back to step 1. It can't be undone, so it waits for the learner's **Restart it** / **Keep my progress** |
+
+Starting a drill creates an interview session (it counts toward a guest's allowance) whose tutor works
+through the planned questions.
+
+Guards, all in code:
+
+- **Idempotency.** Each write is stored in `dbo.PrepActions` under a hash of the tool and its normalised
+  arguments, unique per run, so the same call twice writes once. `POST /api/prep/runs` accepts an
+  `Idempotency-Key` header: a retry returns the first run instead of starting (and paying for) another.
+- **Budget.** At most `Prep:MaxSteps` (8) model calls, `Prep:MaxTokens` (60 000) tokens and
+  `Prep:RunTimeoutSeconds` (120) per run. A run that hits one ends `Stopped`, keeping what it did.
+- **Confirmation.** `restart_practice_item` only records a pending action;
+  `POST /api/prep/runs/{id}/actions/{actionId}/confirm` (or `/reject`) applies it once, without a model call.
+- **Cost.** Guests get `Prep:RunsPerDay` (3) runs in any 24 hours, and everyone gets 2 run requests a
+  minute. Prep tokens show on the Users page with the session costs.
+- **Untrusted input.** The job description is passed as fenced data, and the tools can only touch the
+  caller's own items.
+
+API: `POST /api/prep/runs` (`{ jobDescription, role?, seniority? }`), `GET /api/prep/runs`,
+`GET /api/prep/runs/{id}`, the confirm/reject calls above, `GET /api/prep/drills`,
+`POST /api/prep/drills/{id}/start` and `/cancel`.
+
+### Agent evals
+
+`tests/TutorAI.Tests/AgentEvals` runs the agent against Claude on 25 cases in `AgentEvals/cases/*.json`.
+Each case gives a job description, the learner's sessions and practice items (in memory, no database),
+and what a good run does: which tools it calls or must not call, how many questions and phrases, words
+the questions should mention, whether a drill or a restart is expected. Cases include prompt injection
+in the job description, input that isn't a job description, and a request for other users' data.
+Every run is also checked for completion, the step limit, at most one drill and no prompt leak.
+
+Run it with `$env:TUTORAI_AGENT_EVALS = "1"; dotnet test --filter Category=AgentEval`. It writes a
+Markdown report to the test output and `bin/.../TestResults/agent-evals/`, and fails when fewer than 90%
+of checks pass (`TUTORAI_AGENT_EVALS_BAR`). `TUTORAI_AGENT_EVALS_FILTER` runs only matching case ids and
+`TUTORAI_AGENT_EVALS_REPEATS` runs each case more than once. A full run costs about $1.25 with Sonnet.
+In GitHub, run the **Agent evals** workflow by hand; it needs the `ANTHROPIC_API_KEY` secret and uploads
+the report. The cases' format and the scoring are unit-tested on every push, without Claude.
+
+## MCP server
+
+The API serves a read-only [MCP](https://modelcontextprotocol.io) server at `/mcp` (streamable HTTP,
+stateless), so Claude Code, Claude Desktop or GitHub Copilot can query the learner's own data. Code:
+`src/TutorAI.Api/Mcp`.
+
+| Tool | Returns |
+| --- | --- |
+| `get_progress` | Graded sessions over time: levels per criterion, speaking rate, pause ratio, pronunciation score |
+| `list_practice_items` | Practice items, weakest first, with step, due date and scores, plus due/active/mastered counts |
+| `list_sessions` | Sessions, newest first, with scenario and levels |
+| `get_session` | One session's transcript, levels, summary, advice and corrections |
+
+Access uses its own token: **Create MCP token** on the Account page (`POST /api/auth/mcp-token`) issues
+a read-only token (audience `TutorAI.Mcp`, scope `mcp.read`) that lasts `Auth:McpTokenDays` (30) days.
+`/mcp` accepts only that token, and the rest of the API rejects it. Changing the password, or an admin
+disabling or deleting the user, revokes it at once. Tools always read the token's own user, admins
+included. Calls are limited to 60 a minute per user.
+
+```powershell
+claude mcp add --transport http tutorai http://localhost:5080/mcp --header "Authorization: Bearer <token>"
+```
+
+In Azure, use the API's address (`https://<api-app>.azurewebsites.net/mcp`).
+
 ## Run locally
 
 ```powershell
@@ -292,289 +408,7 @@ The launch profile sets `AZURE_TOKEN_CREDENTIALS=dev`, so locally the API signs 
 credentials only (Azure CLI, Visual Studio, ...). Without it, the managed-identity probe, which only
 works inside Azure, adds about two minutes to every startup.
 
-## Deploy to Azure
+## Deploy
 
-### Target layout
-
-```
-Browser ──HTTPS──> Web App (Next.js, Node 24) ──/api/*──> Web App (TutorAI.Api, .NET 10)
-                                                              │  managed identity
-                                                              ├──> Azure Key Vault (3 secrets)
-                                                              ├──> Azure SQL Database
-                                                              ├──> Azure AI Speech (token exchange)
-                                                              └──> Anthropic API
-Browser ──WebSocket──> Azure AI Speech (short-lived token issued by the API)
-```
-
-All resources go in one resource group, so tearing down is a single command.
-
-### Prerequisites
-
-- An Azure subscription where you can create resources and assign roles (Owner, or Contributor +
-  User Access Administrator).
-- Azure CLI 2.60+ (`az login` done), .NET 10 SDK, Node.js 22+.
-- An Anthropic API key (<https://console.anthropic.com>).
-
-The commands below are PowerShell, run from the repository root.
-
-### 1. Pick names
-
-Key Vault, SQL server and web app names must be globally unique. Change the suffix.
-
-```powershell
-$suffix      = "ip01"                       # make this unique
-$loc         = "eastus"                     # also used as the Speech region
-$rg          = "rg-tutorai"
-$kv          = "kv-tutorai-$suffix"
-$speech      = "speech-tutorai-$suffix"
-$sqlServer   = "sql-tutorai-$suffix"
-$sqlAdmin    = "tutoraiadmin"
-$sqlPassword = "<strong password>"          # 8+ chars, upper, lower, digit, symbol
-$plan        = "plan-tutorai"
-$apiApp      = "tutorai-api-$suffix"
-$webApp      = "tutorai-web-$suffix"
-```
-
-### 2. Resource group
-
-```powershell
-az group create -n $rg -l $loc
-```
-
-### 3. Key Vault
-
-The vault uses Azure RBAC. Give yourself **Key Vault Secrets Officer** so you can write secrets.
-
-```powershell
-az keyvault create -n $kv -g $rg -l $loc --enable-rbac-authorization true
-$kvId = az keyvault show -n $kv -g $rg --query id -o tsv
-$me   = az ad signed-in-user show --query id -o tsv
-az role assignment create --role "Key Vault Secrets Officer" `
-  --assignee-object-id $me --assignee-principal-type User --scope $kvId
-```
-
-Role assignments can take a minute or two to take effect. If the next `secret set` returns
-`Forbidden`, wait and retry.
-
-### 4. Azure AI Speech
-
-```powershell
-az cognitiveservices account create -n $speech -g $rg -l $loc --kind SpeechServices --sku S0 --yes
-$speechKey = az cognitiveservices account keys list -n $speech -g $rg --query key1 -o tsv
-az keyvault secret set --vault-name $kv -n "AzureSpeech--Key" --value $speechKey | Out-Null
-```
-
-### 5. Azure SQL Database
-
-If `az sql server create` fails with `RegionDoesNotAllowProvisioning`, that region isn't taking new SQL
-servers. Pick another (for example `centralus`), with a **new server name**, since the failed name stays
-reserved for a while. Put the App Service plan in the same region as the database.
-
-Create the database explicitly. The migrator creates the database if it's missing, but on Azure SQL a
-bare `CREATE DATABASE` gets a default General Purpose tier that costs far more than this app needs.
-
-```powershell
-az sql server create -n $sqlServer -g $rg -l $loc --admin-user $sqlAdmin --admin-password $sqlPassword
-az sql db create -g $rg -s $sqlServer -n TutorAI --service-objective Basic
-# Or, free (up to 10 per subscription, each with its own monthly free amount; pauses when that is used up). The free amount
-# lasts only if the database auto-pauses when idle, so nothing may query it on a timer.
-# /api/health deliberately doesn't (see step 8). Resuming takes up to a minute: the API keeps retrying the connection
-# meanwhile (SqlDatabase.OpenRetry), and the sign-in page tells the user why it's slow.
-# az sql db create -g $rg -s $sqlServer -n TutorAI --edition GeneralPurpose --compute-model Serverless `
-#   --family Gen5 --capacity 2 --use-free-limit --free-limit-exhaustion-behavior AutoPause
-
-# Let Azure services (the API web app) reach the server
-az sql server firewall-rule create -g $rg -s $sqlServer -n AllowAzureServices `
-  --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0
-
-$conn = "Server=tcp:$sqlServer.database.windows.net,1433;Database=TutorAI;User ID=$sqlAdmin;Password=$sqlPassword;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
-az keyvault secret set --vault-name $kv -n "ConnectionStrings--TutorAI" --value $conn | Out-Null
-```
-
-### 6. Anthropic API key and sign-in secrets
-
-```powershell
-az keyvault secret set --vault-name $kv -n "Anthropic--ApiKey" --value "<anthropic-key>" | Out-Null
-
-# A random JWT signing key; nobody needs to know it.
-$bytes = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-az keyvault secret set --vault-name $kv -n "Auth--JwtSigningKey" --value ([Convert]::ToBase64String($bytes)) | Out-Null
-
-az keyvault secret set --vault-name $kv -n "Auth--AdminPassword" --value "<admin password>" | Out-Null
-```
-
-Check the vault now holds all five secrets:
-
-```powershell
-az keyvault secret list --vault-name $kv --query "[].name" -o tsv
-# Anthropic--ApiKey, Auth--AdminPassword, Auth--JwtSigningKey, AzureSpeech--Key,
-# ConnectionStrings--TutorAI
-```
-
-### 7. Run the database migrations
-
-Run the migrator from your machine. Open the SQL firewall to your IP first.
-
-```powershell
-$myIp = (Invoke-RestMethod https://api.ipify.org)
-az sql server firewall-rule create -g $rg -s $sqlServer -n "deploy-$($env:USERNAME)" `
-  --start-ip-address $myIp --end-ip-address $myIp
-
-dotnet run --project src/TutorAI.Migrations -- "$conn"
-# "Applied N script(s)."  Running it again prints "Database is up to date."
-```
-
-Run this step again whenever a new script is added under `src/TutorAI.Migrations/Scripts`. You can
-remove your IP rule afterwards:
-`az sql server firewall-rule delete -g $rg -s $sqlServer -n "deploy-$($env:USERNAME)"`.
-
-### 8. App Service plan and API web app
-
-```powershell
-az appservice plan create -n $plan -g $rg -l $loc --is-linux --sku B1
-az webapp create -n $apiApp -g $rg -p $plan --runtime "DOTNETCORE:10.0"
-
-# Managed identity, allowed to read secrets
-$apiPrincipal = az webapp identity assign -n $apiApp -g $rg --query principalId -o tsv
-az role assignment create --role "Key Vault Secrets User" `
-  --assignee-object-id $apiPrincipal --assignee-principal-type ServicePrincipal --scope $kvId
-
-az webapp config appsettings set -n $apiApp -g $rg --settings `
-  "KeyVault__Uri=https://$kv.vault.azure.net/" `
-  "AzureSpeech__Region=$loc" `
-  "ASPNETCORE_ENVIRONMENT=Production"
-
-az webapp config set -n $apiApp -g $rg --always-on true --https-only true
-'{"healthCheckPath": "/api/health"}' | Set-Content -Encoding ascii healthcheck.json
-az webapp config set -n $apiApp -g $rg --generic-configurations "@healthcheck.json"
-Remove-Item healthcheck.json
-```
-
-Deploy the API:
-
-```powershell
-dotnet publish src/TutorAI.Api -c Release -o publish/api
-tar.exe -a -c -f publish/api.zip -C publish/api .
-az webapp deploy -g $rg -n $apiApp --src-path publish/api.zip --type zip
-```
-
-Check it:
-
-```powershell
-Invoke-RestMethod "https://$apiApp.azurewebsites.net/api/health/ready"
-# ready: True   database, anthropic and speech each { ok: True, latencyMs, detail }
-```
-
-`/api/health` is what App Service probes about once a minute. It only says the process is up, and it
-never touches the database: a query every minute would keep a serverless database awake around the
-clock. `/api/health/ready` checks the database, the Anthropic API (a free model lookup) and Azure
-Speech. It answers 503 if any of them fails and caches its result for 60 seconds.
-
-If the API fails to start, it's usually Key Vault access: the role assignment hasn't propagated yet
-(restart the app after a couple of minutes) or `KeyVault__Uri` is wrong. See the log stream:
-`az webapp log tail -n $apiApp -g $rg`.
-
-### 9. Web front end
-
-The Next.js app forwards `/api/*` to the API at the address in `TUTORAI_API_URL`, read at request
-time (changing it needs a restart, not a redeploy).
-
-The app is built **on your machine** and deployed as a self-contained `standalone` server
-(`output: "standalone"` in `web/next.config.ts`). Don't let App Service build it: on a B1 plan,
-`npm install` plus `next build` takes over 15 minutes and gets killed.
-
-Create and configure the app first. Settings changes restart the deployment service, so let them settle
-for a minute before deploying.
-
-```powershell
-az webapp create -n $webApp -g $rg -p $plan --runtime "NODE:24-lts"
-az webapp config appsettings set -n $webApp -g $rg --settings `
-  "TUTORAI_API_URL=https://$apiApp.azurewebsites.net" `
-  "SCM_DO_BUILD_DURING_DEPLOYMENT=false" "HOSTNAME=0.0.0.0" "NODE_ENV=production"
-az webapp config set -n $webApp -g $rg --startup-file "node server.js" --always-on true
-az webapp update -n $webApp -g $rg --https-only true
-```
-
-Build, package and deploy:
-
-```powershell
-cd web; npm ci; npm run build; cd ..
-Remove-Item -Recurse -Force publish/web -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force publish/web | Out-Null
-Copy-Item -Recurse web/.next/standalone/* publish/web/
-Copy-Item -Recurse web/.next/static publish/web/.next/static
-Copy-Item -Recurse web/public publish/web/public
-tar.exe -a -c -f publish/web.zip -C publish/web .
-az webapp deploy -g $rg -n $webApp --src-path publish/web.zip --type zip --clean true --track-status false
-```
-
-The deploy itself takes under a minute, and the site starts about 20 seconds later. If the CLI reports
-a 502 or 504, check `https://<webApp>.scm.azurewebsites.net/api/deployments/latest`; the deployment
-often finishes anyway.
-
-### 10. Smoke test
-
-1. Open `https://<webApp>.azurewebsites.net`. You should land on the sign-in page. The site is served
-   over HTTPS, which the browser requires for microphone access.
-2. Sign in as `admin` with the `Auth--AdminPassword` value. Start a short conversation, allow the microphone, speak a few turns, and end the session.
-3. The summary page should show "Scoring your session…", then the CEFR levels (sessions under 150
-   learner words are reported as too short to grade).
-
-## Updating
-
-| Change | What to do |
-| --- | --- |
-| API code | Repeat the publish + `az webapp deploy` in step 8 |
-| Web code | Repeat the build, package and deploy block in step 9 |
-| New migration script | Re-run step 7 before deploying the API |
-| Rotate a key or password | `az keyvault secret set ...` with the new value, then `az webapp restart -n $apiApp -g $rg` |
-| Sign everyone out | Rotate `Auth--JwtSigningKey` and restart the API |
-
-## Monitoring and cost
-
-**Application Insights (optional).** Attach Application Insights to the API web app (portal: the
-app's **Application Insights** blade), or set the `APPLICATIONINSIGHTS_CONNECTION_STRING` app setting
-yourself. When the setting is present, the API exports requests, logs, a span per Claude call
-(`claude.chat`, `claude.grade`, with model, session, user and token counts) and these metrics:
-
-| Metric | Tags |
-| --- | --- |
-| `tutorai.claude.tokens` | `model`, `kind` (input, output, cache_read, cache_write), `route` (chat, grade) |
-| `tutorai.turn.first_token_ms` | `model` |
-| `tutorai.grading.duration_ms` | `outcome` (done, failed) |
-| `tutorai.grading.failures` | `final`, `timed_out` |
-| `tutorai.logins.failed` | `reason` (password, locked, unknown_user) |
-
-Without the setting nothing is exported, as when running locally. For example, tokens per model per day:
-
-```kusto
-customMetrics
-| where name == "tutorai.claude.tokens"
-| summarize tokens = sum(valueSum) by model = tostring(customDimensions.model), bin(timestamp, 1d)
-```
-
-**Cost per user.** Each tutor turn and assessment stores its model and token counts (`dbo.Turns`,
-`dbo.Assessments`), so cost doesn't depend on telemetry retention. The Users page shows each user's
-tokens and estimated cost over the last 30 days. The estimate uses the `Pricing` section of
-`appsettings.json` (USD per million tokens per model), not the bill. Update the prices when they change
-or when you switch models. A model with no price is counted but not costed, shown as "≥ $…".
-
-## Hardening (optional)
-
-- **Lock the API to the web app.** Add an access restriction on the API so only the web app's
-  outbound IPs can call it (`az webapp show -n $webApp -g $rg --query outboundIpAddresses`). Sign-in
-  limits then can't be bypassed by calling the API directly, and per-visitor limits become possible.
-- **Passwordless SQL.** Set a Microsoft Entra admin on the SQL server, create a database user for the
-  API's managed identity, and change the `ConnectionStrings--TutorAI` secret to use
-  `Authentication=Active Directory Managed Identity` with no password.
-- **Private networking.** Put Key Vault and SQL behind private endpoints and enable VNet integration
-  on the API (needs a Basic plan or higher for VNet integration; Standard+ recommended).
-
-## Tear down
-
-Deletes everything created above. Key Vault is soft-deleted; purge it if you want to reuse the name.
-
-```powershell
-az group delete -n $rg --yes
-az keyvault purge -n $kv
-```
+See [docs/deployment.md](docs/deployment.md) for the Azure deployment, updates, monitoring and cost,
+hardening and tear-down.

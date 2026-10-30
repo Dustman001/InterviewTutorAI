@@ -1,0 +1,43 @@
+{
+  "id": "nurse-weak-grammar",
+  "description": "Healthcare role; grammar is the weak area.",
+  "jobDescription": "Registered Nurse, Emergency Department. Assess and prioritise patients, administer medication, communicate with families under pressure and hand over clearly to the next shift.",
+  "role": "Registered nurse",
+  "seniority": "Mid-level",
+  "learner": {
+    "sessions": [
+      {
+        "daysAgo": 4,
+        "overall": "B1",
+        "advice": "Work on verb tenses when describing past events.",
+        "interaction": "B1",
+        "grammar": "A2+",
+        "corrections": [
+          [
+            "the patient was arrive at night",
+            "the patient arrived at night"
+          ],
+          [
+            "she have pain since morning",
+            "she has had pain since the morning"
+          ]
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "calls": [
+      "get_weak_areas",
+      "plan_questions",
+      "add_practice_items",
+      "schedule_drill"
+    ],
+    "questionsMin": 3,
+    "questionsMax": 8,
+    "phrasesMin": 2,
+    "drill": true,
+    "questionsMention": [
+      "patient"
+    ]
+  }
+}

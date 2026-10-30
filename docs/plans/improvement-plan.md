@@ -14,6 +14,7 @@ and idempotent (`IF COL_LENGTH … IS NULL`), never edit an applied script.
 | 2 — reliability | P4 background grading, P5 observability, P6 deep health check, P16 front-end tests | P4 is the most likely user-facing failure. P5 reuses the token counts P3 starts capturing. P16 comes before the bigger UI work in wave 3. |
 | 3 — product | P9 password change, P11 pagination, P7 progress view, P10 accent choice, P12 printable report | Mostly independent features. P7 reads better once P11's index exists. |
 | 4 — depth | P8 practice drills, P13 grading calibration, P14 score sanity checks | P8 hooks into P4's grading worker. P13 needs labelled transcripts (see open questions). |
+| 5 — agent | P17 interview-prep agent, P18 MCP server, P19 agent evals, P20 README design decisions | P18 reuses P17's read queries; P19 needs P17's runner; P20 links to all three. |
 
 ---
 
@@ -419,6 +420,110 @@ session.
 
 ---
 
+## P17. Interview-prep agent — L
+
+**Problem.** The learner pastes a job description into an interview session and the tutor improvises
+questions from it. Nothing looks at what the learner is weak at, and nothing carries the preparation
+past the session.
+
+**Design.** Microsoft Agent Framework (`Microsoft.Agents.AI` + `Microsoft.Agents.AI.Anthropic`) over the
+existing `AnthropicClient`, model `Prep:Model` (Sonnet). One run per request, synchronous:
+`POST /api/prep/runs { jobDescription, role?, seniority? }` with an optional `Idempotency-Key` header.
+
+The model decides; code executes. Every effect goes through a tool:
+
+| Tool | Effect | Reversible? |
+| --- | --- | --- |
+| `get_weak_areas` | Reads the latest graded sessions (levels, advice, corrections) and weak practice items | read |
+| `plan_questions` | Stores the interview questions it chose for this run (3–8) | run-local |
+| `add_practice_items` | Adds phrases to read aloud (new kind `phrase`); targets the learner already has are skipped | yes (delete) |
+| `schedule_drill` | Schedules an interview drill using the planned questions | yes (cancel) |
+| `restart_practice_item` | Sends an item already in progress or mastered back to box 0 | **no**: needs confirmation |
+
+Guards, enforced in code, not in the prompt:
+- **Idempotency.** Every write is recorded in `dbo.PrepActions` under a key derived from (run, tool,
+  normalised arguments), unique per run. A repeated call returns the first result instead of writing
+  again. The `Idempotency-Key` header makes a retried `POST /runs` return the original run instead of
+  starting a second, paid one.
+- **Step and token budget.** A `DelegatingChatClient` (`AgentBudget`) counts model calls and tokens per
+  run and stops the run at `Prep:MaxSteps` (8) or `Prep:MaxTokens` (60 000). Function invocation is
+  also capped (`MaximumIterationsPerRequest`). A stopped run keeps what it already did and reports
+  `Stopped` with the reason.
+- **Confirmation.** `restart_practice_item` never writes; it records a `PendingConfirmation` action.
+  `POST /api/prep/runs/{id}/actions/{actionId}/confirm` (or `/reject`) applies it once, without a model
+  call. Confirming twice is a no-op.
+- **Cost.** Guests get `Prep:RunsPerDay` (3) runs a day; a per-user rate limit applies too.
+- **Untrusted input.** The job description is data: it goes in the user message inside a delimited
+  block, and the tools can only touch the caller's own items.
+
+Schema (`0011_PrepAgent.sql`): `dbo.PrepRuns`, `dbo.PrepActions`, `dbo.Drills`, and `phrase` added to
+the `PracticeItems` kind check. `Scenario` gains `Questions`, which the interview prompt uses as the
+planned questions. Starting a drill (`POST /api/prep/drills/{id}/start`) creates an interview session
+from it and counts toward the guest limit like any session.
+
+Web: a **Prep** page: paste a job description, run, see the questions, what was done, actions waiting
+for confirmation (Confirm / Reject) and scheduled drills (Start / Cancel).
+
+Tracing: the agent and its chat client are instrumented with `UseOpenTelemetry` on the `TutorAI`
+source, so each run is a trace with one span per model call and per tool call.
+
+**Tests.**
+- Unit, with a scripted `IChatClient` (no Claude): step limit, token limit, repeated write call returns
+  the first result, restart goes to pending, confirm applies once, reject leaves the item alone.
+- Integration (SQL): run with the scripted client end to end through the API, idempotency header,
+  daily cap, another user can't confirm or see the run, start a drill.
+
+**Done when.** Those tests pass in CI, and one real run against Claude locally produces questions, items
+and a drill, with a pending restart that confirms once.
+
+---
+
+## P18. MCP server — S
+
+**Design.** `ModelContextProtocol.AspNetCore`, streamable HTTP at `/mcp` on the API, stateless. Read-only
+tools, always scoped to the token's user: `get_progress`, `list_practice_items`, `list_sessions`,
+`get_session` (transcript and assessment).
+
+Auth: MCP clients can't refresh the web app's 15-minute token, so `POST /api/auth/mcp-token` issues a
+read-only token (audience `TutorAI.Mcp`, `Auth:McpTokenDays`, 30). It carries the user's token version,
+so a password change or disable revokes it. `/mcp` accepts only that audience; the rest of the API
+rejects it. The Account page gets a **Create MCP token** button that shows the token once with the
+client configuration to paste.
+
+**Tests.** Integration: an MCP client (`ModelContextProtocol` client over HTTP) lists the tools and calls
+each; a web token is refused at `/mcp`; an MCP token is refused by `/api/*`; a password change revokes it;
+user A can't read user B's session.
+
+**Done when.** Those tests pass and a real MCP client (Claude Code) lists the tools against a local API.
+
+---
+
+## P19. Agent evals — M
+
+**Design.** Like the calibration harness (P13): `tests/TutorAI.Tests/AgentEvals`, cases in
+`AgentEvals/cases/*.json`, gated by `TUTORAI_AGENT_EVALS=1`, `Category=AgentEval`. Each case gives a job
+description and the learner's state (assessments and practice items, in memory) and checks the run's
+recorded tool calls and outputs: questions count and relevance, tools used, no restart without cause,
+injection attempts ignored, budget respected. A Markdown report goes to the test output and
+`TestResults/agent-evals/`. The run fails below `TUTORAI_AGENT_EVALS_BAR` (90 %) of checks passed.
+
+CI: a `workflow_dispatch` job runs it on demand with the `ANTHROPIC_API_KEY` secret and uploads the report.
+
+**Done when.** 20–30 cases are checked in, the harness runs locally against Claude with the report
+written, and the CI job exists.
+
+---
+
+## P20. README design decisions — S
+
+**Design.** A short **Design decisions** section at the top: model vs code, failure handling, limits,
+evals, tracing, each linking to the code. The Azure deployment guide moves to `docs/deployment.md`.
+GitHub description, topics and a demo GIF are done by the owner (commands in the plan's open questions).
+
+**Done when.** Every link in the section resolves to a file in the repo.
+
+---
+
 ## Open questions
 
 1. **CI host:** decided, GitHub Actions (`.github/workflows/ci.yml`). (P15)
@@ -427,3 +532,6 @@ session.
 4. **Cost limits:** decided 2026-10-29, keep the shipped defaults (150 learner turns, 4000 characters and
    100 phrases per turn, 5-minute grace, 20 turns a minute). Review them against the Users page's 30-day
    usage once guests have used the app for a couple of weeks; each is a `Sessions:*` setting.
+5. **Repository page:** set by the owner, not automated (it changes the public repo):
+   `gh repo edit --description "Speaking tutor: Claude conversation and mock interviews, Azure Speech pronunciation scoring, CEFR grading, interview-prep agent and MCP server" --add-topic dotnet,aspnet-core,nextjs,claude,anthropic,azure-speech,cefr,ai-agents,mcp,microsoft-agent-framework`.
+   A 30-second demo GIF (prep run → drill → graded summary) goes in `docs/demo.gif`, linked from the README.
