@@ -115,7 +115,13 @@ public sealed class GradingWorker(
             GradingClaim? claim;
             try
             {
-                claim = await repository.ClaimGradingAsync(settings.StaleGradingMinutes, settings.MaxGradingAttempts, stop);
+                // The claim itself is not cancellable: cancelled after the database commits it, it would throw and
+                // leave the session Running, with an attempt used, until it went stale. A claim made as shutdown
+                // begins reaches a job, which sees the cancelled token and puts it back.
+                claim = stop.IsCancellationRequested
+                    ? null
+                    : await repository.ClaimGradingAsync(
+                        settings.StaleGradingMinutes, settings.MaxGradingAttempts, CancellationToken.None);
             }
             catch
             {
