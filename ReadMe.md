@@ -378,7 +378,8 @@ az sql server create -n $sqlServer -g $rg -l $loc --admin-user $sqlAdmin --admin
 az sql db create -g $rg -s $sqlServer -n TutorAI --service-objective Basic
 # Or, free (up to 10 per subscription, each with its own monthly free amount; pauses when that is used up). The free amount
 # lasts only if the database auto-pauses when idle, so nothing may query it on a timer.
-# /api/health deliberately doesn't (see step 8).
+# /api/health deliberately doesn't (see step 8). Resuming takes up to a minute: the API keeps retrying the connection
+# meanwhile (SqlDatabase.OpenRetry), and the sign-in page tells the user why it's slow.
 # az sql db create -g $rg -s $sqlServer -n TutorAI --edition GeneralPurpose --compute-model Serverless `
 #   --family Gen5 --capacity 2 --use-free-limit --free-limit-exhaustion-behavior AutoPause
 

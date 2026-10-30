@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { useHydrated } from "@/lib/hydrated";
 
 const MIN_PASSWORD_LENGTH = 8;
 
 export default function Account() {
+  const hydrated = useHydrated();
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -105,7 +107,7 @@ export default function Account() {
           />
         </label>
         <p className="hint">At least {MIN_PASSWORD_LENGTH} characters. Changing it signs you out everywhere else.</p>
-        <button className="primary" type="submit" disabled={busy}>
+        <button className="primary" type="submit" disabled={!hydrated || busy}>
           {busy ? "Changing…" : "Change password"}
         </button>
       </form>

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api, practice, signOut, type AccentChoice, type CurrentUser, type Mode, type SessionSummary } from "@/lib/api";
 import { formatDate, scenarioTitle } from "@/lib/format";
+import { useHydrated } from "@/lib/hydrated";
 
 const TOPICS = ["Small talk", "Travel", "Work and career", "Technology", "Opinions and debate"];
 const INTERVIEW_TYPES = ["Behavioral", "Technical", "HR screening"];
@@ -13,6 +14,7 @@ const DURATIONS = [5, 10, 15, 20, 30];
 
 export default function Home() {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [mode, setMode] = useState<Mode>("Conversation");
   const [topic, setTopic] = useState(TOPICS[0]);
   const [customTopic, setCustomTopic] = useState("");
@@ -244,7 +246,7 @@ export default function Home() {
         {outOfSessions && (
           <p className="hint">This guest account has used all {user?.sessionLimit} of its sessions.</p>
         )}
-        <button className="primary" type="submit" disabled={busy || outOfSessions}>
+        <button className="primary" type="submit" disabled={!hydrated || busy || outOfSessions}>
           {busy ? "Starting…" : "Start session"}
         </button>
       </form>

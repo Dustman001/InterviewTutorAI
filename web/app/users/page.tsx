@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { api, users, type AdminUser, type NewUser, type UsageEstimate } from "@/lib/api";
 import { formatDate } from "@/lib/format";
+import { useHydrated } from "@/lib/hydrated";
 
 const MIN_PASSWORD = 8;
 
@@ -82,6 +83,7 @@ export default function UsersPage() {
 }
 
 function CreateUser({ onCreate }: { onCreate: (user: NewUser) => Promise<boolean> }) {
+  const hydrated = useHydrated();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<"Admin" | "Guest">("Guest");
@@ -148,7 +150,7 @@ function CreateUser({ onCreate }: { onCreate: (user: NewUser) => Promise<boolean
           </label>
         )}
       </div>
-      <button className="primary" type="submit" disabled={busy}>
+      <button className="primary" type="submit" disabled={!hydrated || busy}>
         {busy ? "Adding…" : "Add user"}
       </button>
     </form>
