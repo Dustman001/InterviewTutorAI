@@ -32,7 +32,20 @@ public sealed class SqlDatabase : IUnitOfWorkFactory
             ?? throw new InvalidOperationException("ConnectionStrings:TutorAI is not configured.");
     }
 
-    public SqlConnection Open() => new(_connectionString);
+    /// <summary>
+    /// Retries opening a connection on transient errors, such as 40613 while a paused serverless database resumes
+    /// (up to about a minute), instead of failing the request. Only the open is retried, never a command.
+    /// Waits about 2, 4, 8, 16 and 20 seconds between attempts.
+    /// </summary>
+    private static readonly SqlRetryLogicBaseProvider OpenRetry = SqlConfigurableRetryFactory.CreateExponentialRetryProvider(
+        new SqlRetryLogicOption
+        {
+            NumberOfTries = 6,
+            DeltaTime = TimeSpan.FromSeconds(2),
+            MaxTimeInterval = TimeSpan.FromSeconds(20),
+        });
+
+    public SqlConnection Open() => new(_connectionString) { RetryLogicProvider = OpenRetry };
 
     public async Task<IUnitOfWork> BeginAsync(CancellationToken ct)
     {
