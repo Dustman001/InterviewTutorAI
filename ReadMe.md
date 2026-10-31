@@ -12,6 +12,13 @@ lets Claude or Copilot read the learner's progress.
 | Web front end | `web` | Next.js 16 (proxies `/api/*` to the API) |
 | Tests | `tests/TutorAI.Tests` | xUnit (integration tests gated by `TUTORAI_E2E=1`) |
 
+| Prep run | Confirmation before an irreversible change | Session summary |
+| --- | --- | --- |
+| [![A completed prep run: the agent's summary and the planned questions](docs/screenshots/prep-run.png)](docs/screenshots/prep-run.png) | [![The agent proposes restarting a mastered practice item; the learner chooses Keep my progress or Restart it](docs/screenshots/prep-confirmation.png)](docs/screenshots/prep-confirmation.png) | [![A graded interview: CEFR levels per criterion, overall feedback and quoted evidence](docs/screenshots/session-summary.png)](docs/screenshots/session-summary.png) |
+
+Taken from a local run with real Claude calls. The session in the third shot was typed rather than
+spoken, so it has no pronunciation level.
+
 ## Design decisions
 
 - **Model vs code.** Claude makes the judgement calls: the tutor's replies, the CEFR levels for fluency,
@@ -22,6 +29,15 @@ lets Claude or Copilot read the learner's progress.
   ([TurnScoreCheck](src/TutorAI.Api/Assessment/TurnScoreCheck.cs)), and every write the agent makes. The
   agent's tools validate their arguments, touch only the caller's own data, and return errors to the
   model so it can correct itself ([PrepTools](src/TutorAI.Api/Prep/PrepTools.cs)).
+- **Agent shape.** The prep run is one agent with five tools, not a graph or several agents: there is one
+  learner, one goal and a short plan (read weak areas, plan questions, add phrases, schedule a drill)
+  whose order and contents depend on the job. The model decides those; the tools and the budget enforce
+  the rules, so a graph would add hand-offs without adding judgement
+  ([PrepAgent](src/TutorAI.Api/Prep/PrepAgent.cs)). Grading is a fixed pipeline instead: pronunciation
+  scores from Azure, one Claude call with a fixed rubric for the other four levels, then code for the
+  overall level and the practice items ([AssessmentService](src/TutorAI.Api/Assessment/AssessmentService.cs),
+  [CefrGrader](src/TutorAI.Api/Assessment/CefrGrader.cs)). Its steps never change, and it has to be
+  repeatable, calibrated and safe to retry, so there's no choice of next step for an agent to make.
 - **Failure handling.** Grading runs in a durable background queue with retries and recovers jobs from a
   dead instance ([GradingWorker](src/TutorAI.Api/Assessment/GradingWorker.cs)). Every agent write is
   recorded under an idempotency key, so a repeated call writes once; a retried `POST /api/prep/runs`
@@ -34,10 +50,13 @@ lets Claude or Copilot read the learner's progress.
   Each agent run has a step limit, a token budget and a time limit
   ([AgentBudget](src/TutorAI.Api/Prep/AgentBudget.cs)); guests get 3 runs a day. Sign-in has lockout and
   rate limits ([Program.cs](src/TutorAI.Api/Program.cs)).
-- **Evals.** The grader is checked against teachers' ratings
-  ([Calibration](tests/TutorAI.Tests/Calibration)). The prep agent has 25 eval cases, from ordinary
-  postings to prompt injection and non-job input, run against Claude on demand locally or in CI
-  ([AgentEvals](tests/TutorAI.Tests/AgentEvals), [agent-evals.yml](.github/workflows/agent-evals.yml)).
+- **Evals.** The grader has a calibration harness that compares its levels with teachers' ratings
+  ([Calibration](tests/TutorAI.Tests/Calibration)). The harness and its report are tested, but rated
+  samples are still pending, so the grader's agreement with teachers hasn't been measured yet. The prep
+  agent has 25 eval cases, from ordinary postings to prompt injection and non-job input, run against
+  Claude on demand locally or in CI ([AgentEvals](tests/TutorAI.Tests/AgentEvals),
+  [agent-evals.yml](.github/workflows/agent-evals.yml)). Latest run, on 30 October 2026: every case 3
+  times, 1011/1011 checks passed ([report](docs/agent-evals-report.md)).
   Its guards are unit-tested with a scripted model, so CI checks them on every push
   ([PrepAgentTests](tests/TutorAI.Tests/Services/PrepAgentTests.cs)).
 - **Tracing.** OpenTelemetry to Application Insights: a span per Claude call, a span per agent run with
@@ -286,7 +305,8 @@ pronunciation thresholds from the rated samples. The run fails if any criterion 
 fewer than 85% of gradings (`TUTORAI_CALIBRATION_BAR`). It costs one Opus call per sample per repeat,
 about $0.05 each, with the grader prompt cached. `TUTORAI_CALIBRATION_DIR` points it at another folder.
 
-No rated samples are checked in yet; around 30-50 sessions spread across A2-C1 are needed. Each
+Rated samples are pending: none are checked in yet, so the grader's agreement with teachers hasn't been
+measured. Around 30-50 sessions spread across A2-C1 are needed. Each
 assessment stores the grader's `PromptVersion` (`CefrGrader.CurrentPromptVersion`). Change that constant
 whenever the prompt changes, so stored grades can be traced and calibration results compared.
 
@@ -342,6 +362,10 @@ of checks pass (`TUTORAI_AGENT_EVALS_BAR`). `TUTORAI_AGENT_EVALS_FILTER` runs on
 `TUTORAI_AGENT_EVALS_REPEATS` runs each case more than once. A full run costs about $1.25 with Sonnet.
 In GitHub, run the **Agent evals** workflow by hand; it needs the `ANTHROPIC_API_KEY` secret and uploads
 the report. The cases' format and the scoring are unit-tested on every push, without Claude.
+
+The latest report is checked in at [docs/agent-evals-report.md](docs/agent-evals-report.md): Sonnet, 25
+cases run 3 times each, 1011/1011 checks passed, about 870k tokens in all. An earlier single run scored
+336/337; the one miss came from a badly designed case, which was fixed before this run.
 
 ## MCP server
 
