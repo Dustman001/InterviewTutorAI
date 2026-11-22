@@ -59,6 +59,11 @@ builder.Services.Configure<AnthropicOptions>(builder.Configuration.GetSection("A
 // save an assessment; the timeout ends an attempt before that can happen.
 builder.Services.AddOptions<AssessmentOptions>()
     .Bind(builder.Configuration.GetSection("Assessment"))
+    // A negative timeout makes every attempt throw; zero cancels it before it starts. Together with the rule below,
+    // this also keeps StaleGradingMinutes at 1 or more.
+    .Validate(
+        assessment => assessment.GradingTimeoutSeconds > 0,
+        "Assessment:GradingTimeoutSeconds must be greater than 0.")
     .Validate(
         assessment => assessment.GradingTimeoutSeconds < assessment.StaleGradingMinutes * 60,
         "Assessment:GradingTimeoutSeconds must be less than Assessment:StaleGradingMinutes in seconds, or a grading still running is claimed again.")

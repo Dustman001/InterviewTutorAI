@@ -219,6 +219,19 @@ public sealed class BackgroundGradingTests(ThrowawayDatabase database) : IClassF
         Assert.Contains("Assessment:GradingTimeoutSeconds must be less than", error.ToString());
     }
 
+    [E2EFact]
+    public void The_api_refuses_to_start_with_a_grading_timeout_that_is_not_positive()
+    {
+        foreach (var timeout in new[] { "0", "-1" })
+        {
+            using var api = CreateApi(new FakeGrader(), ("Assessment:GradingTimeoutSeconds", timeout));
+
+            var error = Assert.ThrowsAny<Exception>(() => api.CreateClient());
+
+            Assert.Contains("Assessment:GradingTimeoutSeconds must be greater than 0.", error.ToString());
+        }
+    }
+
     private WebApplicationFactory<Program> CreateApi(FakeGrader grader, params (string, string)[] settings) =>
         TestApi.CreateWithServices(
             database.ConnectionString, services => services.AddSingleton<ICefrGrader>(grader), settings);
