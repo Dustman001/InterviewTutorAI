@@ -22,14 +22,41 @@ public static class AuthEndpoints
     private static void FailedLogin(string reason) =>
         Telemetry.LoginsFailed.Add(1, new KeyValuePair<string, object?>("reason", reason));
 
+    // Security events log the user id only: never the username (a mistyped password often lands there) or a password.
+
+    private static void LockedRefused(ILogger logger, UserRow user, DateTime lockedUntil)
+    {
+        FailedLogin("locked");
+        logger.LogInformation("Sign-in refused for locked account {UserId} until {LockedUntil}", user.Id, lockedUntil);
+    }
+
+    /// <summary>Counts a wrong password toward the lockout and logs it, and the lock if this failure started one.</summary>
+    private static async Task WrongPasswordAsync(
+        ILogger logger, IUserRepository users, UserRow user, AuthOptions options, DateTime now, CancellationToken ct)
+    {
+        var lockedUntil = await users.RecordFailedLoginAsync(
+            user.Id, now, options.LockoutThreshold, options.LockoutBaseSeconds, options.LockoutMaxSeconds, ct);
+        FailedLogin("password");
+        logger.LogInformation("Sign-in failed for account {UserId}: wrong password", user.Id);
+
+        // A locked account is refused before its password is checked, so a lock returned here began with this failure.
+        if (lockedUntil is { } until && DateTime.SpecifyKind(until, DateTimeKind.Utc) > now)
+        {
+            logger.LogWarning(
+                "Account {UserId} locked until {LockedUntil} after repeated failed sign-ins",
+                user.Id, DateTime.SpecifyKind(until, DateTimeKind.Utc));
+        }
+    }
+
     public static void MapAuthEndpoints(this IEndpointRouteBuilder app)
     {
         var auth = app.MapGroup("/api/auth");
 
         auth.MapPost("/login", async (
             LoginRequest request, HttpContext http, UserSeeder seeder, IUserRepository users, IPasswordHasher<UserRow> hasher,
-            TokenService tokens, IOptions<AuthOptions> auth, TimeProvider clock, CancellationToken ct) =>
+            TokenService tokens, IOptions<AuthOptions> auth, TimeProvider clock, ILoggerFactory loggers, CancellationToken ct) =>
         {
+            var logger = loggers.CreateLogger(typeof(AuthEndpoints));
             if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrEmpty(request.Password))
             {
                 return Results.BadRequest(new { error = "Enter a username and password." });
@@ -48,16 +75,13 @@ public static class AuthEndpoints
             var now = clock.GetUtcNow().UtcDateTime;
             if (user.LockedUntil is { } lockedUntil && DateTime.SpecifyKind(lockedUntil, DateTimeKind.Utc) > now)
             {
-                FailedLogin("locked");
+                LockedRefused(logger, user, DateTime.SpecifyKind(lockedUntil, DateTimeKind.Utc));
                 return Locked(http, DateTime.SpecifyKind(lockedUntil, DateTimeKind.Utc) - now);
             }
 
             if (hasher.VerifyHashedPassword(user, user.PasswordHash, request.Password) == PasswordVerificationResult.Failed)
             {
-                var options = auth.Value;
-                await users.RecordFailedLoginAsync(
-                    user.Id, now, options.LockoutThreshold, options.LockoutBaseSeconds, options.LockoutMaxSeconds, ct);
-                FailedLogin("password");
+                await WrongPasswordAsync(logger, users, user, auth.Value, now, ct);
                 return wrong;
             }
 
@@ -65,6 +89,7 @@ public static class AuthEndpoints
 
             if (user.IsDisabled)
             {
+                logger.LogWarning("Sign-in refused for disabled account {UserId}", user.Id);
                 return Results.Json(new { error = "This account is disabled." }, statusCode: StatusCodes.Status403Forbidden);
             }
 
@@ -90,27 +115,25 @@ public static class AuthEndpoints
         auth.MapPost("/password", async (
             ChangePasswordRequest request, ClaimsPrincipal principal, HttpContext http, IUserRepository users,
             IPasswordHasher<UserRow> hasher, TokenService tokens, IOptions<AuthOptions> auth, TimeProvider clock,
-            CancellationToken ct) =>
+            ILoggerFactory loggers, CancellationToken ct) =>
         {
             if (await users.GetByIdAsync(principal.UserId(), ct) is not { } user)
             {
                 return Results.Unauthorized();
             }
 
+            var logger = loggers.CreateLogger(typeof(AuthEndpoints));
             var now = clock.GetUtcNow().UtcDateTime;
             if (user.LockedUntil is { } lockedUntil && DateTime.SpecifyKind(lockedUntil, DateTimeKind.Utc) > now)
             {
-                FailedLogin("locked");
+                LockedRefused(logger, user, DateTime.SpecifyKind(lockedUntil, DateTimeKind.Utc));
                 return Locked(http, DateTime.SpecifyKind(lockedUntil, DateTimeKind.Utc) - now);
             }
 
             if (string.IsNullOrEmpty(request.CurrentPassword)
                 || hasher.VerifyHashedPassword(user, user.PasswordHash, request.CurrentPassword) == PasswordVerificationResult.Failed)
             {
-                var options = auth.Value;
-                await users.RecordFailedLoginAsync(
-                    user.Id, now, options.LockoutThreshold, options.LockoutBaseSeconds, options.LockoutMaxSeconds, ct);
-                FailedLogin("password");
+                await WrongPasswordAsync(logger, users, user, auth.Value, now, ct);
                 return Results.BadRequest(new { error = "Your current password is wrong." });
             }
 

@@ -35,6 +35,9 @@ public static class Telemetry
     public static readonly Counter<long> LoginsFailed = Meter.CreateCounter<long>(
         "tutorai.logins.failed", "{attempt}", "Failed sign-ins, tagged by reason (password, locked, unknown_user).");
 
+    public static readonly Counter<long> RequestsRateLimited = Meter.CreateCounter<long>(
+        "tutorai.requests.rate_limited", "{request}", "Requests rejected by a rate limit policy, tagged by policy.");
+
     public static readonly Counter<long> ScoresRejected = Meter.CreateCounter<long>(
         "tutorai.turns.scores_rejected", "{turn}", "Learner turns whose browser-sent speech scores failed the plausibility checks.");
 
