@@ -55,7 +55,14 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNEC
 
 builder.Services.Configure<AzureSpeechOptions>(builder.Configuration.GetSection("AzureSpeech"));
 builder.Services.Configure<AnthropicOptions>(builder.Configuration.GetSection("Anthropic"));
-builder.Services.Configure<AssessmentOptions>(builder.Configuration.GetSection("Assessment"));
+// A grading still running when it goes stale is claimed again, and the two attempts would both call Claude and both
+// save an assessment; the timeout ends an attempt before that can happen.
+builder.Services.AddOptions<AssessmentOptions>()
+    .Bind(builder.Configuration.GetSection("Assessment"))
+    .Validate(
+        assessment => assessment.GradingTimeoutSeconds < assessment.StaleGradingMinutes * 60,
+        "Assessment:GradingTimeoutSeconds must be less than Assessment:StaleGradingMinutes in seconds, or a grading still running is claimed again.")
+    .ValidateOnStart();
 builder.Services.Configure<SessionLimitsOptions>(builder.Configuration.GetSection("Sessions"));
 builder.Services.Configure<PrepOptions>(builder.Configuration.GetSection("Prep"));
 builder.Services.Configure<Dictionary<string, ModelPrice>>(builder.Configuration.GetSection("Pricing"));
