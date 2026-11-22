@@ -77,6 +77,7 @@ public sealed class AssessmentOptions
     /// here: the configuration binder appends configured items to an array's existing ones.)
     /// </summary>
     public int[] RetryDelaySeconds { get; set; } = [];
+    /// <summary>Must be less than <see cref="StaleGradingMinutes"/> in seconds; the API refuses to start otherwise.</summary>
     public int GradingTimeoutSeconds { get; set; } = 300;
     /// <summary>A Running grading claimed longer ago than this is taken to be orphaned (the worker stopped) and claimed again.</summary>
     public int StaleGradingMinutes { get; set; } = 10;

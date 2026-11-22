@@ -208,6 +208,17 @@ public sealed class BackgroundGradingTests(ThrowawayDatabase database) : IClassF
         Assert.Equal(("Running", 1), State(sessionId));
     }
 
+    [E2EFact]
+    public void The_api_refuses_to_start_when_a_grading_could_outlive_its_claim()
+    {
+        // 600 s is exactly the 10-minute stale limit: the attempt could still be running when it is claimed again.
+        using var api = CreateApi(new FakeGrader(), ("Assessment:GradingTimeoutSeconds", "600"), ("Assessment:StaleGradingMinutes", "10"));
+
+        var error = Assert.ThrowsAny<Exception>(() => api.CreateClient());
+
+        Assert.Contains("Assessment:GradingTimeoutSeconds must be less than", error.ToString());
+    }
+
     private WebApplicationFactory<Program> CreateApi(FakeGrader grader, params (string, string)[] settings) =>
         TestApi.CreateWithServices(
             database.ConnectionString, services => services.AddSingleton<ICefrGrader>(grader), settings);
