@@ -49,17 +49,17 @@ public static class SessionEndpoints
 
     public static void MapSessionEndpoints(this IEndpointRouteBuilder app)
     {
+        // Logs inside a session's routes carry its SessionId; UserId comes from the global UserLogScope (Program.cs).
         var sessions = app.MapGroup("/api/sessions").AddEndpointFilter(async (context, next) =>
         {
             var http = context.HttpContext;
-            var logger = http.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(SessionEndpoints));
-            var scope = new Dictionary<string, object?> { ["UserId"] = http.User.FindFirst(TokenService.UserIdClaim)?.Value };
-            if (http.Request.RouteValues.TryGetValue("id", out var id))
+            if (!http.Request.RouteValues.TryGetValue("id", out var id))
             {
-                scope["SessionId"] = id;
+                return await next(context);
             }
 
-            using (logger.BeginScope(scope))
+            var logger = http.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(SessionEndpoints));
+            using (logger.BeginScope(new Dictionary<string, object?> { ["SessionId"] = id }))
             {
                 return await next(context);
             }

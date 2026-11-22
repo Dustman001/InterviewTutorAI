@@ -255,6 +255,7 @@ yourself. When the setting is present, the API exports requests, logs, a span pe
 | `tutorai.grading.duration_ms` | `outcome` (done, failed) |
 | `tutorai.grading.failures` | `final`, `timed_out` |
 | `tutorai.logins.failed` | `reason` (password, locked, unknown_user) |
+| `tutorai.requests.rate_limited` | `policy` (login, turns, prep-runs, mcp) |
 
 Without the setting nothing is exported, as when running locally. For example, tokens per model per day:
 
@@ -262,6 +263,23 @@ Without the setting nothing is exported, as when running locally. For example, t
 customMetrics
 | where name == "tutorai.claude.tokens"
 | summarize tokens = sum(valueSum) by model = tostring(customDimensions.model), bin(timestamp, 1d)
+```
+
+**Error logs.** Every response with status 400 or above gets one log line (category
+`TutorAI.Api.Logging.RequestOutcomeLogging`) with the route template, status, user id and trace id:
+401/403/413/429 at Information, 5xx returned without an exception at Warning, other 4xx at Debug (not
+exported). An unhandled exception is logged once at Error and answered with a problem+json 500 whose
+`traceId` is the `operation_Id` to search for. Sign-in failures on known accounts, lockouts and
+disabled-account sign-ins are logged with the user id only. Log entries written while a signed-in request
+runs carry `UserId` (and `SessionId` inside a session) as custom dimensions. The unhandled-exception entry
+is written after those scopes close and gets no outcome line, so it has no `UserId`: search its
+`operation_Id`, and the user shows only on entries the same request logged earlier. Every entry also carries ASP.NET Core's request scope, including
+the raw `RequestPath`, as request telemetry does.
+
+```kusto
+traces
+| where customDimensions.CategoryName == "TutorAI.Api.Logging.RequestOutcomeLogging"
+| summarize count() by route = tostring(customDimensions.Route), status = tostring(customDimensions.StatusCode)
 ```
 
 **Cost per user.** Each tutor turn, assessment and prep run stores its model and token counts (`dbo.Turns`,

@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Anthropic;
 using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
+using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -18,6 +20,7 @@ using TutorAI.Api.Conversation;
 using TutorAI.Api.Data;
 using TutorAI.Api.Endpoints;
 using TutorAI.Api.Health;
+using TutorAI.Api.Logging;
 using TutorAI.Api.Mcp;
 using TutorAI.Api.Practice;
 using TutorAI.Api.Prep;
@@ -45,6 +48,9 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNEC
         .UseAzureMonitor()
         .WithTracing(tracing => tracing.AddSource(Telemetry.Name))
         .WithMetrics(metrics => metrics.AddMeter(Telemetry.Name));
+
+    // So the UserId and SessionId log scopes reach Application Insights as custom dimensions.
+    builder.Services.Configure<OpenTelemetryLoggerOptions>(logging => logging.IncludeScopes = true);
 }
 
 builder.Services.Configure<AzureSpeechOptions>(builder.Configuration.GetSection("AzureSpeech"));
@@ -86,6 +92,10 @@ builder.Services.AddRateLimiter(limiter =>
     limiter.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     limiter.OnRejected = async (context, ct) =>
     {
+        // The 429 itself is logged by RequestOutcomeLogging; the counter shows which limit is being hit.
+        Telemetry.RequestsRateLimited.Add(1, new KeyValuePair<string, object?>(
+            "policy", context.HttpContext.GetEndpoint()?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName ?? "unknown"));
+
         if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
         {
             context.HttpContext.Response.Headers.RetryAfter =
@@ -161,8 +171,19 @@ builder.Services.AddSingleton<GradingSignal>();
 builder.Services.AddHostedService<GradingWorker>();
 builder.Services.AddHttpClient<SpeechTokenService>();
 builder.Services.AddSingleton<ReadinessCheck>();
+// Unhandled exceptions answer 500 with a problem+json body carrying the trace id (no exception detail). The default
+// traceId is the full W3C traceparent; use the bare trace id, which is Application Insights' operation_Id and what
+// the log entries carry.
+builder.Services.AddProblemDetails(problems => problems.CustomizeProblemDetails = context =>
+    context.ProblemDetails.Extensions["traceId"] = Activity.Current?.TraceId.ToString() ?? context.HttpContext.TraceIdentifier);
 
 var app = builder.Build();
+
+// Outermost: logs an unhandled exception once, at Error, and writes the problem details response.
+app.UseExceptionHandler();
+// Inside the exception handler, so exceptions are logged by the handler only; outside everything else, so
+// the 413 below and authentication/authorization/rate-limit rejections are logged too.
+app.UseRequestOutcomeLogging();
 
 // Kestrel enforces the limit too, but only once the body is read; this answers 413 up front from the declared length.
 app.Use((http, next) =>
@@ -177,6 +198,8 @@ app.Use((http, next) =>
 });
 
 app.UseAuthentication();
+// After authentication, which sets the user: every log entry from here on carries UserId.
+app.UseUserLogScope();
 app.UseAuthorization();
 // After authentication, so turn requests are limited per user.
 app.UseRateLimiter();
@@ -203,7 +226,7 @@ app.MapGet("/api/speech/accents", (IOptions<AzureSpeechOptions> options) =>
 // to the default, as it does for sessions.
 app.MapGet("/api/speech/token", async (
     Guid? sessionId, string? accent, ClaimsPrincipal user, ISessionRepository sessions, IOptions<AzureSpeechOptions> options,
-    SpeechTokenService speech, CancellationToken ct) =>
+    SpeechTokenService speech, ILogger<SpeechTokenService> logger, CancellationToken ct) =>
 {
     Accent? chosen = null;
     if (accent is not null && sessionId is null)
@@ -237,6 +260,8 @@ app.MapGet("/api/speech/token", async (
     }
     catch (HttpRequestException ex)
     {
+        // Never log the request: its headers carry the subscription key.
+        logger.LogWarning(ex, "Azure Speech rejected the token request with {StatusCode}", (int?)ex.StatusCode);
         return Results.Json(
             new { error = $"Azure Speech rejected the token request ({(int?)ex.StatusCode}). Check the key and region." },
             statusCode: StatusCodes.Status502BadGateway);
