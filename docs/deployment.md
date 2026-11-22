@@ -272,8 +272,8 @@ exported). An unhandled exception is logged once at Error and answered with a pr
 `traceId` is the `operation_Id` to search for. Sign-in failures on known accounts, lockouts and
 disabled-account sign-ins are logged with the user id only. Log entries written while a signed-in request
 runs carry `UserId` (and `SessionId` inside a session) as custom dimensions. The unhandled-exception entry
-is written after those scopes close, so find its user through the request's `operation_Id` (the outcome
-lines and request telemetry share it). Every entry also carries ASP.NET Core's request scope, including
+is written after those scopes close and gets no outcome line, so it has no `UserId`: search its
+`operation_Id`, and the user shows only on entries the same request logged earlier. Every entry also carries ASP.NET Core's request scope, including
 the raw `RequestPath`, as request telemetry does.
 
 ```kusto
