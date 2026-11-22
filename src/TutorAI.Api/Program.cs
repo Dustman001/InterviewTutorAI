@@ -65,7 +65,8 @@ builder.Services.AddOptions<AssessmentOptions>()
         assessment => assessment.GradingTimeoutSeconds > 0,
         "Assessment:GradingTimeoutSeconds must be greater than 0.")
     .Validate(
-        assessment => assessment.GradingTimeoutSeconds < assessment.StaleGradingMinutes * 60,
+        // In long: a huge negative StaleGradingMinutes would wrap to a large positive int and pass.
+        assessment => assessment.GradingTimeoutSeconds < (long)assessment.StaleGradingMinutes * 60,
         "Assessment:GradingTimeoutSeconds must be less than Assessment:StaleGradingMinutes in seconds, or a grading still running is claimed again.")
     .ValidateOnStart();
 builder.Services.Configure<SessionLimitsOptions>(builder.Configuration.GetSection("Sessions"));
