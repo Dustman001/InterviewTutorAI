@@ -181,6 +181,7 @@ builder.Services.AddSingleton<TurnService>();
 builder.Services.AddSingleton<ICefrGrader, CefrGrader>();
 builder.Services.AddSingleton<AssessmentService>();
 builder.Services.AddSingleton<GradingSignal>();
+builder.Services.AddSingleton<GradingWakeup>();
 builder.Services.AddHostedService<GradingWorker>();
 builder.Services.AddHttpClient<SpeechTokenService>();
 builder.Services.AddSingleton<ReadinessCheck>();

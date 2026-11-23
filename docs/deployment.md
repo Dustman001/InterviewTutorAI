@@ -254,6 +254,7 @@ yourself. When the setting is present, the API exports requests, logs, a span pe
 | `tutorai.turn.first_token_ms` | `model` |
 | `tutorai.grading.duration_ms` | `outcome` (done, failed) |
 | `tutorai.grading.failures` | `final`, `timed_out` |
+| `tutorai.grading.wakeups` | – |
 | `tutorai.logins.failed` | `reason` (password, locked, unknown_user) |
 | `tutorai.requests.rate_limited` | `policy` (login, turns, prep-runs, mcp) |
 

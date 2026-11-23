@@ -133,6 +133,30 @@ public sealed class BackgroundGradingTests(ThrowawayDatabase database) : IClassF
     }
 
     [E2EFact]
+    public async Task An_orphaned_pending_job_is_graded_once_its_learner_polls()
+    {
+        var grader = new FakeGrader();
+        await using var api = CreateApi(grader);
+        var client = await SignInAsync(api);
+        var sessionId = await CreateSpokenSessionAsync(api, client);
+
+        // As if another instance queued the grading and went away before its worker claimed it: no signal here.
+        using (var db = database.Open())
+        {
+            db.Execute(
+                "UPDATE dbo.Sessions SET Status = 'Ended', EndedAt = SYSUTCDATETIME(), GradingState = 'Pending' WHERE Id = @sessionId",
+                new { sessionId });
+        }
+
+        // Nobody polls (read straight from the database, not the API): the idle worker leaves it alone.
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        Assert.Equal(("Pending", 0), State(sessionId));
+
+        await WaitForAssessmentAsync(client, sessionId);
+        Assert.Equal(1, grader.Calls);
+    }
+
+    [E2EFact]
     public async Task Shutting_down_mid_grading_puts_the_job_back_without_using_an_attempt()
     {
         var grader = new FakeGrader { Delay = TimeSpan.FromMinutes(1) };

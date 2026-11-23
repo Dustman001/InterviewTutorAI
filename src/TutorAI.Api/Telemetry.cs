@@ -32,6 +32,9 @@ public static class Telemetry
     public static readonly Counter<long> GradingFailures = Meter.CreateCounter<long>(
         "tutorai.grading.failures", "{attempt}", "Failed grading attempts, tagged final=true when the session was marked Failed.");
 
+    public static readonly Counter<long> GradingWakeups = Meter.CreateCounter<long>(
+        "tutorai.grading.wakeups", "{wakeup}", "Grading worker wake-ups from a learner polling a session whose grading was due.");
+
     public static readonly Counter<long> LoginsFailed = Meter.CreateCounter<long>(
         "tutorai.logins.failed", "{attempt}", "Failed sign-ins, tagged by reason (password, locked, unknown_user).");
 
