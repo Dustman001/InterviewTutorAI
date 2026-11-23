@@ -127,13 +127,17 @@ public static class SessionEndpoints
         });
 
         sessions.MapGet("/{id:guid}", async (
-            Guid id, ClaimsPrincipal user, ISessionRepository repository, AssessmentService assessments, CancellationToken ct) =>
+            Guid id, ClaimsPrincipal user, ISessionRepository repository, AssessmentService assessments, GradingWakeup wakeup,
+            CancellationToken ct) =>
         {
             var session = await repository.GetSessionAsync(id, ct);
             if (!CanAccess(user, session))
             {
                 return Results.NotFound();
             }
+
+            // The summary page polls this while scoring: pick up a grading another instance left behind.
+            wakeup.OnPolled(session);
 
             var turns = await repository.GetTurnsAsync(id, includePronunciationJson: false, ct);
             return Results.Ok(new SessionDetailDto(

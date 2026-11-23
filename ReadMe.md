@@ -277,6 +277,9 @@ Grading a long session takes a while, so `/end` doesn't wait for it:
   exactly one of them.
 - The worker reads the queue only when there may be work: at startup, when a session ends, and when a
   retry falls due. It doesn't poll while idle, so a serverless database can still pause.
+- When the summary page polls a session whose grading is due, the instance that answers wakes its
+  worker too (at most once every 30 s per instance). A job left by an instance that went away is
+  picked up while someone is waiting for it.
 
 ### Grading calibration
 
